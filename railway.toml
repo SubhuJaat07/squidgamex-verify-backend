@@ -1,8 +1,0 @@
-[build]
-buildCommand = "cd squidgamex-verify-backend && npm install"
-
-[deploy]
-startCommand = "cd squidgamex-verify-backend && node index.js"
-
-[root]
-path = "squidgamex-verify-backend"
