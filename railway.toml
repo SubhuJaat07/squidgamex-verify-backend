@@ -1,8 +1,8 @@
 [build]
-builder = "NIXPACKS"
-buildCommand = "npm install"
+buildCommand = "cd squidgamex-verify-backend && npm install"
 
 [deploy]
-startCommand = "node index.js"
-project = "squidgamex-verify-backend"
-rootPath = "squidgamex-verify-backend"
+startCommand = "cd squidgamex-verify-backend && node index.js"
+
+[root]
+path = "squidgamex-verify-backend"
