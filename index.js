@@ -1,115 +1,80 @@
-// index.js — SquidGameX Verify Backend (Stable Version)
-
 const express = require("express");
+const cors = require("cors");
+const admin = require("firebase-admin");
 const { Client, GatewayIntentBits } = require("discord.js");
 require("dotenv").config();
 
 const app = express();
+app.use(cors());
+app.use(express.json());
+
 const PORT = process.env.PORT || 10000;
 
-// 💾 Temporary storage (RAM)
-// (restart hoga to reset ho jayega — next step: database)
-const pending = {};     // code → { hwid, createdAt }
-const verified = {};    // hwid → expiryTimestamp(ms)
-
-// ==========================
-//    HTTP ROUTES
-// ==========================
-app.get("/", (req, res) => {
-  res.send("🚀 SquidGameX Verify Server is LIVE (Render)!");
+// 🔥 Firebase Init
+admin.initializeApp({
+  credential: admin.credential.cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+  }),
 });
+const db = admin.firestore();
+const verifyDB = db.collection("verifications");
 
-// Roblox script calls this:
-app.get("/check", (req, res) => {
-  const hwid = req.query.hwid;
-  if (!hwid) return res.json({ status: "ERROR", msg: "NO_HWID" });
-
-  const now = Date.now();
-
-  // ⭐ If already verified, do NOT send new code
-  if (verified[hwid] && verified[hwid] > now) {
-    console.log(`[VALID] HWID ${hwid} already verified.`);
-    return res.json({ status: "VALID" });
-  }
-
-  // New code only when needed
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  pending[code] = { hwid, createdAt: now };
-
-  console.log(`[VERIFY] HWID ${hwid} → Sending code: ${code}`);
-
-  return res.json({
-    status: "NEED_VERIFY",
-    code: code
-  });
-});
-
-// ==========================
-//    DISCORD BOT PART
-// ==========================
+// 🔥 Discord Bot Init
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
+client.login(process.env.BOT_TOKEN);
 
 client.once("ready", () => {
-  console.log(`🤖 BOT ONLINE: ${client.user.tag}`);
+  console.log(`🤖 BOT READY — Logged in as ${client.user.tag}`);
 });
 
-client.on("messageCreate", (message) => {
-  if (message.author.bot) return;
+// Discord Command: !verify CODE
+client.on("messageCreate", async (message) => {
   if (!message.content.startsWith("!verify")) return;
+  const args = message.content.split(" ");
 
-  const parts = message.content.trim().split(/\s+/);
-  if (parts.length < 2) {
-    return message.reply("Use: `!verify <code>`");
+  if (args.length < 2) {
+    return message.reply("❌ Use: `!verify 123456`");
   }
 
-  const code = parts[1];
-  const entry = pending[code];
-  const now = Date.now();
+  const code = args[1];
 
-  // ❌ No code found / expired
-  if (!entry) {
-    return message.reply("❌ Invalid or expired code.");
-  }
+  const snapshot = await verifyDB.where("code", "==", code).get();
+  if (snapshot.empty) return message.reply("❌ Invalid or expired code!");
 
-  // ⭐ If already verified
-  if (verified[entry.hwid] && verified[entry.hwid] > now) {
-    return message.reply("⚠ Already verified! You can use the script.");
-  }
+  const doc = snapshot.docs[0];
+  await doc.ref.update({ verified: true });
 
-  // Activate HWID for 24 hours
-  const durationMs = 24 * 60 * 60 * 1000; // 24 HOURS
-  verified[entry.hwid] = now + durationMs;
-
-  delete pending[code]; // remove code (one-time use)
-
-  console.log(`[OK] HWID ${entry.hwid} verified by ${message.author.tag}`);
-
-  return message.reply(`
-  🔓 **Device Verified!**
-  🕐 Verification Active for 24 hours
-  ✔ You can now use the script.
-  `);
+  return message.reply("✅ Verification Success! You are now connected.");
 });
 
-// Login bot if token exists
-const token = process.env.BOT_TOKEN;
-if (!token) {
-  console.warn("⚠ BOT_TOKEN ENV MISSING — BOT LOGIN SKIPPED");
-} else {
-  client.login(token).catch((err) => {
-    console.error("Bot login failed:", err);
+// 🎯 Roblox Check Route
+app.get("/check", async (req, res) => {
+  const { hwid } = req.query;
+  if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
+
+  // Search HWID
+  const snap = await verifyDB.where("hwid", "==", hwid).get();
+  if (!snap.empty) {
+    const data = snap.docs[0].data();
+    if (data.verified === true) return res.json({ status: "VALID" });
+    return res.json({ status: "NEED_VERIFY", code: data.code });
+  }
+
+  // Generate new code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  await verifyDB.add({
+    hwid,
+    code,
+    verified: false,
+    created: Date.now(),
   });
-}
 
-// ==========================
-//    START HTTP SERVER
-// ==========================
-app.listen(PORT, () => {
-  console.log(`🌐 HTTP server running on port ${PORT}`);
+  return res.json({ status: "NEED_VERIFY", code });
 });
+
+// Start Server
+app.listen(PORT, () => console.log(`🚀 API Running on ${PORT}`));
