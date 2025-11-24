@@ -30,7 +30,7 @@ const client = new Client({
 
 client.login(process.env.DISCORD_BOT_TOKEN);
 
-client.once("ready", () => {
+client.once("clientready", () => {
   console.log(`🤖 BOT READY — Logged in as ${client.user.tag}`);
 });
 
