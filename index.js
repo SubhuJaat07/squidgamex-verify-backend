@@ -6,10 +6,8 @@ require("dotenv").config();
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const ADMIN_ID = "1169492860278669312"; // Aapki ID
-
-// 👇 YAHAN APNI SERVER ID DALO (Right Click Server Icon -> Copy ID)
-const GUILD_ID = "SERVER_ID_YAHAN_PASTE_KARO"; 
+const ADMIN_ID = "1169492860278669312"; // Subhu Jaat (You)
+const GUILD_ID = "1257403231127076915"; // Tumhara Server ID
 
 const TABLE = "verifications";
 
@@ -45,13 +43,13 @@ client.once("clientready", async () => {
   try {
     console.log("Started refreshing Guild (/) commands...");
     
-    // 👇 YE WALA FUNCTION INSTANT HOTA HAI
+    // 👇 SERVER SPECIFIC REGISTRATION (Instant)
     await rest.put(
       Routes.applicationGuildCommands(client.user.id, GUILD_ID), 
       { body: commands }
     );
     
-    console.log("✅ Slash Commands Registered INSTANTLY for this Server!");
+    console.log("✅ Slash Commands Registered INSTANTLY for Server: " + GUILD_ID);
   } catch (error) {
     console.error("❌ Command Error:", error);
   }
@@ -80,7 +78,7 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const content = message.content.trim();
 
-  // 👉 CASE 1: SIRF "😎" EMOJI (Only for You)
+  // 👉 CASE 1: SIRF "😎" EMOJI (Only for YOU)
   if (content === "😎") {
     if (message.author.id !== ADMIN_ID) return; 
 
