@@ -35,6 +35,9 @@ client.once("clientready", () => {
   console.log(`Bot Ready: ${client.user.tag}`);
 });
 
+// ----------------------------------------
+// 📌 Verify Command (Checks Expiry)
+// ----------------------------------------
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (!message.content.startsWith("!verify")) return;
@@ -53,6 +56,11 @@ client.on("messageCreate", async (message) => {
 
   if (!data) return message.reply("❌ Invalid code!");
 
+  // ✅ CHECK: Kya code expire ho gaya hai?
+  if (data.expires_at && new Date() > new Date(data.expires_at)) {
+    return message.reply("❌ This code has EXPIRED! Please rejoin the game to get a new one.");
+  }
+
   await supabase
     .from(TABLE)
     .update({ verified: true })
@@ -61,9 +69,16 @@ client.on("messageCreate", async (message) => {
   return message.reply("✅ Success! You can play now.");
 });
 
+// ----------------------------------------
+// 🎯 Roblox Check (Sets 24h Expiry)
+// ----------------------------------------
 app.get("/check", async (req, res) => {
   const { hwid } = req.query;
   if (!hwid) return res.json({ status: "ERROR", message: "No HWID" });
+
+  // Calculate 24 Hours from now
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   const { data: existing } = await supabase
     .from(TABLE)
@@ -73,12 +88,31 @@ app.get("/check", async (req, res) => {
     .maybeSingle();
 
   if (existing) {
+    // Agar pehle se verified hai
     if (existing.verified === true) {
       return res.json({ status: "VALID" });
     }
+
+    // ✅ CHECK: Agar code expire ho gaya hai, toh NAYA banao
+    const isExpired = existing.expires_at && new Date(existing.expires_at) < now;
+    
+    if (isExpired) {
+      const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+      
+      // Update with new code and new 24h time
+      await supabase
+        .from(TABLE)
+        .update({ code: newCode, expires_at: expiresAt })
+        .eq("id", existing.id);
+
+      return res.json({ status: "NEED_VERIFY", code: newCode });
+    }
+
+    // Agar expire nahi hua, wahi purana code return karo
     return res.json({ status: "NEED_VERIFY", code: existing.code });
   }
 
+  // New User: Create with 24h expiry
   const code = Math.floor(100000 + Math.random() * 900000).toString();
 
   await supabase.from(TABLE).insert([
@@ -86,7 +120,7 @@ app.get("/check", async (req, res) => {
       hwid: hwid,
       code: code,
       verified: false,
-      expires_at: null
+      expires_at: expiresAt // 👈 24h time set
     }
   ]);
 
