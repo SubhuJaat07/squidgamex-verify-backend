@@ -6,7 +6,8 @@ require("dotenv").config();
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const ADMIN_ID = "1169492860278669312"; // Aapki ID Fix hai
+// 👇 Sirf ye ID "😎" use kar payegi
+const ADMIN_ID = "1169492860278669312"; 
 const TABLE = "verifications";
 
 const app = express();
@@ -21,17 +22,17 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds, 
     GatewayIntentBits.GuildMessages, 
-    GatewayIntentBits.MessageContent // Message padhne ke liye zaruri hai
+    GatewayIntentBits.MessageContent
   ],
 });
 
-// --- SLASH COMMAND REGISTER (/setexpiry) ---
+// --- SLASH COMMAND REGISTER ---
 const commands = [
   new SlashCommandBuilder()
     .setName("setexpiry")
     .setDescription("Admin Only: Set custom expiry")
-    .addStringOption(option => option.setName("target").setDescription("Code/HWID").setRequired(true))
-    .addStringOption(option => option.setName("duration").setDescription("24h, 2d, lifetime").setRequired(true)),
+    .addStringOption(option => option.setName("target").setDescription("Code or HWID").setRequired(true))
+    .addStringOption(option => option.setName("duration").setDescription("e.g. 24h, 2d, lifetime").setRequired(true)),
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
@@ -39,58 +40,63 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN)
 client.once("clientready", async () => {
   console.log(`🤖 Bot Ready: ${client.user.tag}`);
   try {
+    // Commands register kar raha hai...
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log("Slash commands reloaded.");
+    console.log("✅ Slash Commands Registered Successfully!");
   } catch (error) {
-    console.error(error);
+    console.error("❌ Command Error:", error);
   }
 });
 
 // ---------------------------------------------------------
-// 🛠️ VERIFICATION LOGIC
+// 🛠️ VERIFICATION LOGIC (Common Function)
 // ---------------------------------------------------------
 async function handleVerification(message, code) {
-  // 1. Check Code
+  // Check Code
   const { data } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
 
-  if (!data) return message.reply("❌ **Invalid Code!**");
+  if (!data) return message.reply("❌ **Invalid Code!** Check karke dubara bhejein.");
 
-  // 2. Set 24 Hours Expiry
+  // Set 24 Hours Expiry
   const now = new Date();
   const expiryTime = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
-  // 3. Update DB
+  // Update DB
   await supabase.from(TABLE).update({ verified: true, expires_at: expiryTime }).eq("id", data.id);
 
-  return message.reply(`✅ **Done Sir!** Verification Successful (24 Hours). 🎮`);
+  return message.reply(`✅ **Access Granted!**\nAccount verified for **24 Hours**. 🎮`);
 }
 
 // ---------------------------------------------------------
-// 💬 MESSAGE HANDLER (😎 & Verify)
+// 💬 MESSAGE HANDLER
 // ---------------------------------------------------------
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const content = message.content.trim();
 
-  // 👉 CASE 1: SPECIAL ADMIN EMOJI "😎"
+  // 👉 CASE 1: SIRF "😎" EMOJI (Only for You)
   if (content === "😎") {
-    // Check: Kya ye Admin (Aap) hain?
-    if (message.author.id !== ADMIN_ID) return; // Agar koi aur hai to IGNORE
+    // Security Check: Kya aap Admin hain?
+    if (message.author.id !== ADMIN_ID) return; // Dusro ko ignore karega
 
     await message.reply("बोलिये सर, आपका टोकन नम्बर क्या है? 🙇‍♂️");
 
-    // Wait for Token (60 seconds)
-    const filter = (m) => m.author.id === ADMIN_ID; // Sirf aapka reply sunega
+    // Wait for Token
+    const filter = (m) => m.author.id === ADMIN_ID;
     const collector = message.channel.createMessageCollector({ filter, time: 60000, max: 1 });
 
     collector.on('collect', async (m) => {
       const token = m.content.trim();
-      await handleVerification(m, token);
+      // Agar user galti se number ki jagah text bhej de toh crash na ho
+      if(token.length > 3) { 
+          await handleVerification(m, token);
+          collector.stop();
+      }
     });
     return;
   }
 
-  // 👉 CASE 2: NORMAL USER (verify 123456)
+  // 👉 CASE 2: PUBLIC COMMAND (verify 123456)
   if (content.toLowerCase().startsWith("verify")) {
     const args = content.split(/\s+/);
     if (args.length < 2) return message.reply("❌ **Use:** `verify 123456`");
@@ -104,7 +110,7 @@ client.on("messageCreate", async (message) => {
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === "setexpiry") {
-    if (interaction.user.id !== ADMIN_ID) return interaction.reply({ content: "❌ Not Authorized!", ephemeral: true });
+    if (interaction.user.id !== ADMIN_ID) return interaction.reply({ content: "❌ Sirf Admin ye use kar sakta hai!", ephemeral: true });
 
     const target = interaction.options.getString("target");
     const duration = interaction.options.getString("duration");
@@ -116,7 +122,7 @@ client.on("interactionCreate", async (interaction) => {
         newDate = d.toISOString();
     } else {
         const match = duration.match(/^(\d+)([hdmw])$/);
-        if (!match) return interaction.reply({ content: "❌ Invalid format! Use: 24h, 2d", ephemeral: true });
+        if (!match) return interaction.reply({ content: "❌ Invalid format! Use: 24h, 2d, 1w", ephemeral: true });
         const val = parseInt(match[1]), unit = match[2], now = new Date();
         if (unit === 'h') now.setHours(now.getHours() + val);
         if (unit === 'd') now.setDate(now.getDate() + val);
@@ -126,10 +132,10 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-    if (!data) return interaction.reply("❌ Target not found.");
+    if (!data) return interaction.reply("❌ Target database mein nahi mila.");
 
     await supabase.from(TABLE).update({ verified: true, expires_at: newDate }).eq("id", data.id);
-    return interaction.reply(`✅ Updated ${target} to ${duration}`);
+    return interaction.reply(`✅ **Updated!**\nTarget: ${target}\nDuration: ${duration}\nStatus: Verified`);
   }
 });
 
