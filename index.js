@@ -6,8 +6,11 @@ require("dotenv").config();
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-// 👇 Sirf ye ID "😎" use kar payegi
-const ADMIN_ID = "1169492860278669312"; 
+const ADMIN_ID = "1169492860278669312"; // Aapki ID
+
+// 👇 YAHAN APNI SERVER ID DALO (Right Click Server Icon -> Copy ID)
+const GUILD_ID = "SERVER_ID_YAHAN_PASTE_KARO"; 
+
 const TABLE = "verifications";
 
 const app = express();
@@ -40,9 +43,15 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN)
 client.once("clientready", async () => {
   console.log(`🤖 Bot Ready: ${client.user.tag}`);
   try {
-    // Commands register kar raha hai...
-    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-    console.log("✅ Slash Commands Registered Successfully!");
+    console.log("Started refreshing Guild (/) commands...");
+    
+    // 👇 YE WALA FUNCTION INSTANT HOTA HAI
+    await rest.put(
+      Routes.applicationGuildCommands(client.user.id, GUILD_ID), 
+      { body: commands }
+    );
+    
+    console.log("✅ Slash Commands Registered INSTANTLY for this Server!");
   } catch (error) {
     console.error("❌ Command Error:", error);
   }
@@ -52,16 +61,13 @@ client.once("clientready", async () => {
 // 🛠️ VERIFICATION LOGIC (Common Function)
 // ---------------------------------------------------------
 async function handleVerification(message, code) {
-  // Check Code
   const { data } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
 
   if (!data) return message.reply("❌ **Invalid Code!** Check karke dubara bhejein.");
 
-  // Set 24 Hours Expiry
   const now = new Date();
   const expiryTime = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
-  // Update DB
   await supabase.from(TABLE).update({ verified: true, expires_at: expiryTime }).eq("id", data.id);
 
   return message.reply(`✅ **Access Granted!**\nAccount verified for **24 Hours**. 🎮`);
@@ -76,18 +82,15 @@ client.on("messageCreate", async (message) => {
 
   // 👉 CASE 1: SIRF "😎" EMOJI (Only for You)
   if (content === "😎") {
-    // Security Check: Kya aap Admin hain?
-    if (message.author.id !== ADMIN_ID) return; // Dusro ko ignore karega
+    if (message.author.id !== ADMIN_ID) return; 
 
     await message.reply("बोलिये सर, आपका टोकन नम्बर क्या है? 🙇‍♂️");
 
-    // Wait for Token
     const filter = (m) => m.author.id === ADMIN_ID;
     const collector = message.channel.createMessageCollector({ filter, time: 60000, max: 1 });
 
     collector.on('collect', async (m) => {
       const token = m.content.trim();
-      // Agar user galti se number ki jagah text bhej de toh crash na ho
       if(token.length > 3) { 
           await handleVerification(m, token);
           collector.stop();
@@ -96,11 +99,10 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // 👉 CASE 2: PUBLIC COMMAND (verify 123456)
+  // 👉 CASE 2: PUBLIC COMMAND
   if (content.toLowerCase().startsWith("verify")) {
     const args = content.split(/\s+/);
     if (args.length < 2) return message.reply("❌ **Use:** `verify 123456`");
-    
     const code = args[1];
     await handleVerification(message, code);
   }
