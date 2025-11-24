@@ -6,7 +6,7 @@ require("dotenv").config();
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const ADMIN_ID = "YAHAN_APNI_DISCORD_ID_DALO"; // <--- ⚠️ Yahan apni ID paste karein
+const ADMIN_ID = "1169492860278669312";
 const TABLE = "verifications";
 
 const app = express();
