@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
+// 👇 MessageFlags import kiya hai warning fix karne ke liye
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, MessageFlags } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
 
@@ -38,7 +39,6 @@ const commands = [
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
 
-// 👇 YAHAN FIX KIYA HAI (clientready -> ready)
 client.once("ready", async () => {
   console.log(`✅ Bot Logged In as: ${client.user.tag}`);
   try {
@@ -75,7 +75,7 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const content = message.content.trim();
 
-  // 👉 Admin Emoji Check
+  // 👉 Admin Logic (😎 Trigger)
   if (content === "😎") {
     if (message.author.id !== ADMIN_ID) return; 
 
@@ -85,9 +85,19 @@ client.on("messageCreate", async (message) => {
     const collector = message.channel.createMessageCollector({ filter, time: 60000, max: 1 });
 
     collector.on('collect', async (m) => {
-      const token = m.content.trim();
-      if(token.length > 3) { 
-          await handleVerification(m, token);
+      const replyText = m.content.trim().toLowerCase();
+
+      // 👇 FUNNY LOGIC: Agar aap daant do bot ko
+      const triggerWords = ["tu chup rh", "chup rah", "bakwas nhi", "shant", "chup"];
+      if (triggerWords.some(word => replyText.includes(word))) {
+          await m.reply("Sorry Sir, My mistake 🤐");
+          collector.stop();
+          return;
+      }
+
+      // Normal Verification
+      if(m.content.length > 3) { 
+          await handleVerification(m, m.content.trim());
           collector.stop();
       }
     });
@@ -106,8 +116,15 @@ client.on("messageCreate", async (message) => {
 // --- SLASH COMMAND HANDLER ---
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+  
   if (interaction.commandName === "setexpiry") {
-    if (interaction.user.id !== ADMIN_ID) return interaction.reply({ content: "❌ Sirf Admin!", ephemeral: true });
+    // 👇 FUNNY LOGIC: Only Subhu Boss Check
+    if (interaction.user.id !== ADMIN_ID) {
+        return interaction.reply({ 
+            content: "❌ **Only Subhu boss hi is command ko use kr skte hai!**", 
+            flags: MessageFlags.Ephemeral // 👈 Fixed Warning
+        });
+    }
 
     const target = interaction.options.getString("target");
     const duration = interaction.options.getString("duration");
@@ -119,7 +136,12 @@ client.on("interactionCreate", async (interaction) => {
         newDate = d.toISOString();
     } else {
         const match = duration.match(/^(\d+)([hdmw])$/);
-        if (!match) return interaction.reply({ content: "❌ Invalid format! Use: 24h, 2d", ephemeral: true });
+        if (!match) {
+            return interaction.reply({ 
+                content: "❌ Invalid format! Use: 24h, 2d", 
+                flags: MessageFlags.Ephemeral // 👈 Fixed Warning
+            });
+        }
         const val = parseInt(match[1]), unit = match[2], now = new Date();
         if (unit === 'h') now.setHours(now.getHours() + val);
         if (unit === 'd') now.setDate(now.getDate() + val);
@@ -129,10 +151,15 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-    if (!data) return interaction.reply("❌ Target not found.");
+    if (!data) {
+        return interaction.reply({ 
+            content: "❌ Target not found.", 
+            flags: MessageFlags.Ephemeral // 👈 Fixed Warning
+        });
+    }
 
     await supabase.from(TABLE).update({ verified: true, expires_at: newDate }).eq("id", data.id);
-    return interaction.reply(`✅ Updated ${target} to ${duration}`);
+    return interaction.reply(`✅ Updated **${target}** to **${duration}**`);
   }
 });
 
