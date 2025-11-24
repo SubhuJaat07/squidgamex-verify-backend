@@ -11,7 +11,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
 // ----------------------------------------
-// ✅ NEW: KEEPALIVE ROUTE (For UptimeRobot)
+// ✅ KEEPALIVE ROUTE (For UptimeRobot)
 // ----------------------------------------
 app.get("/", (req, res) => {
   res.send("Squid Game X Backend is Alive! 🟢");
@@ -25,7 +25,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Table name:
+// Table name
 const TABLE = "verifications";
 
 // ----------------------------------------
@@ -49,7 +49,7 @@ client.once("clientready", () => {
 // 📌 Discord Command: !verify CODE
 // ----------------------------------------
 client.on("messageCreate", async (message) => {
-  // Ignore messages from bots
+  // Ignore bot messages
   if (message.author.bot) return;
 
   if (!message.content.startsWith("!verify")) return;
@@ -62,7 +62,7 @@ client.on("messageCreate", async (message) => {
 
   const code = args[1];
 
-  // Find row with this code
+  // 1. Check code in DB
   const { data, error } = await supabase
     .from(TABLE)
     .select("*")
@@ -72,7 +72,7 @@ client.on("messageCreate", async (message) => {
 
   if (!data) return message.reply("❌ Invalid or expired code!");
 
-  // Mark verified = true
+  // 2. Update verified status
   await supabase
     .from(TABLE)
     .update({ verified: true })
@@ -82,13 +82,14 @@ client.on("messageCreate", async (message) => {
 });
 
 // ----------------------------------------
-// 🎯 Roblox Route /check?hwid=XXXXX
+// 🎯 Roblox Route: /check?hwid=XXXXX
 // ----------------------------------------
+// Note: 'async' keyword yahan zaruri hai 👇
 app.get("/check", async (req, res) => {
   const { hwid } = req.query;
   if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
 
-  // 1) See if HWID exists
+  // 1. Check if HWID exists
   const { data: existing } = await supabase
     .from(TABLE)
     .select("*")
@@ -96,9 +97,47 @@ app.get("/check", async (req, res) => {
     .limit(1)
     .maybeSingle();
 
-  // If exists
+  // If exists, check status
   if (existing) {
     if (existing.verified === true) {
+      return res.json({ status: "VALID" });
+    }
+    return res.json({ status: "NEED_VERIFY", code: existing.code });
+  }
+
+  // 2. Create new record if not exists
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+  // Ye await tabhi chalega jab function async ho (jo upar hai)
+  await supabase.from(TABLE).insert([
+    {
+      hwid: hwid,
+      code: code,
+      verified: false,
+      expires_at: null,
+    }
+  ]);
+
+  return res.json({ status: "NEED_VERIFY", code });
+});
+
+// ----------------------------------------
+// 🚀 Start Server
+// ----------------------------------------
+app.listen(PORT, () => console.log(`🚀 API Running on port ${PORT}`));
+      code: code,
+      verified: false,
+      expires_at: null,
+    }
+  ]);
+
+  return res.json({ status: "NEED_VERIFY", code });
+});
+
+// ----------------------------------------
+// 🚀 Start API Server
+// ----------------------------------------
+app.listen(PORT, () => console.log(`🚀 API Running on port ${PORT}`));
       return res.json({ status: "VALID" });
     }
     return res.json({ status: "NEED_VERIFY", code: existing.code });
