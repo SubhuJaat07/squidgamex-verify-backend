@@ -1,14 +1,13 @@
 const express = require("express");
 const cors = require("cors");
-// 👇 MessageFlags import kiya hai warning fix karne ke liye
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, MessageFlags } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const ADMIN_ID = "1169492860278669312"; 
-const GUILD_ID = "1257403231127076915"; 
+const ADMIN_ID = "1169492860278669312"; // Subhu Jaat
+const GUILD_ID = "1257403231127076915"; // Server ID
 
 const TABLE = "verifications";
 
@@ -34,7 +33,8 @@ const commands = [
     .setName("setexpiry")
     .setDescription("Admin Only: Set custom expiry")
     .addStringOption(option => option.setName("target").setDescription("Code or HWID").setRequired(true))
-    .addStringOption(option => option.setName("duration").setDescription("e.g. 24h, 2d, lifetime").setRequired(true)),
+    // 👇 Updated Description: Added '10m' example
+    .addStringOption(option => option.setName("duration").setDescription("e.g. 10m, 1h, 2d, lifetime").setRequired(true)),
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
@@ -58,14 +58,14 @@ client.once("ready", async () => {
 async function handleVerification(message, code) {
   const { data } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
 
-  if (!data) return message.reply("❌ **Invalid Code!**");
+  if (!data) return message.reply("❌ **Invalid Code!** Sir, code galat lag raha hai.");
 
   const now = new Date();
   const expiryTime = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   await supabase.from(TABLE).update({ verified: true, expires_at: expiryTime }).eq("id", data.id);
 
-  return message.reply(`✅ **Access Granted!**\nVerified for **24 Hours**. 🎮`);
+  return message.reply(`✅ **Access Granted!**\nVerified for **24 Hours**. Enjoy Sir! 🎮`);
 }
 
 // ---------------------------------------------------------
@@ -75,7 +75,7 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const content = message.content.trim();
 
-  // 👉 Admin Logic (😎 Trigger)
+  // 👉 CASE 1: ADMIN EMOJI "😎" (With Funny Mode)
   if (content === "😎") {
     if (message.author.id !== ADMIN_ID) return; 
 
@@ -85,26 +85,28 @@ client.on("messageCreate", async (message) => {
     const collector = message.channel.createMessageCollector({ filter, time: 60000, max: 1 });
 
     collector.on('collect', async (m) => {
-      const replyText = m.content.trim().toLowerCase();
+      const msg = m.content.toLowerCase();
+      const token = m.content.trim();
 
-      // 👇 FUNNY LOGIC: Agar aap daant do bot ko
-      const triggerWords = ["tu chup rh", "chup rah", "bakwas nhi", "shant", "chup"];
-      if (triggerWords.some(word => replyText.includes(word))) {
-          await m.reply("Sorry Sir, My mistake 🤐");
+      // 😂 FUNNY SCOLD CHECK
+      const scoldWords = ["chup", "bakwas", "shant", "bol mat", "silence", "gyan mat"];
+      
+      if (scoldWords.some(word => msg.includes(word))) {
+          await m.reply("Sorry Sir, My mistake! Main chup ho jata hu. 🤐");
           collector.stop();
           return;
       }
 
-      // Normal Verification
-      if(m.content.length > 3) { 
-          await handleVerification(m, m.content.trim());
+      // Normal Code Check
+      if(token.length > 3) { 
+          await handleVerification(m, token);
           collector.stop();
       }
     });
     return;
   }
 
-  // 👉 Public Verify Command
+  // 👉 CASE 2: PUBLIC VERIFY
   if (content.toLowerCase().startsWith("verify")) {
     const args = content.split(/\s+/);
     if (args.length < 2) return message.reply("❌ **Use:** `verify 123456`");
@@ -113,18 +115,11 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// --- SLASH COMMAND HANDLER ---
+// --- SLASH COMMAND HANDLER (/setexpiry) ---
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  
   if (interaction.commandName === "setexpiry") {
-    // 👇 FUNNY LOGIC: Only Subhu Boss Check
-    if (interaction.user.id !== ADMIN_ID) {
-        return interaction.reply({ 
-            content: "❌ **Only Subhu boss hi is command ko use kr skte hai!**", 
-            flags: MessageFlags.Ephemeral // 👈 Fixed Warning
-        });
-    }
+    if (interaction.user.id !== ADMIN_ID) return interaction.reply({ content: "❌ Sirf Admin!", ephemeral: true });
 
     const target = interaction.options.getString("target");
     const duration = interaction.options.getString("duration");
@@ -135,31 +130,29 @@ client.on("interactionCreate", async (interaction) => {
         d.setFullYear(d.getFullYear() + 100);
         newDate = d.toISOString();
     } else {
+        // 👇 Regex supports: m (minutes), h (hours), d (days), w (weeks)
         const match = duration.match(/^(\d+)([hdmw])$/);
-        if (!match) {
-            return interaction.reply({ 
-                content: "❌ Invalid format! Use: 24h, 2d", 
-                flags: MessageFlags.Ephemeral // 👈 Fixed Warning
-            });
-        }
-        const val = parseInt(match[1]), unit = match[2], now = new Date();
+        
+        if (!match) return interaction.reply({ content: "❌ Invalid format! Use: 10m, 24h, 2d", ephemeral: true });
+        
+        const val = parseInt(match[1]);
+        const unit = match[2];
+        const now = new Date();
+
+        // 👇 Minute Logic Added Here
+        if (unit === 'm') now.setMinutes(now.getMinutes() + val);
         if (unit === 'h') now.setHours(now.getHours() + val);
         if (unit === 'd') now.setDate(now.getDate() + val);
-        if (unit === 'm') now.setMinutes(now.getMinutes() + val);
         if (unit === 'w') now.setDate(now.getDate() + (val * 7));
+        
         newDate = now.toISOString();
     }
 
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-    if (!data) {
-        return interaction.reply({ 
-            content: "❌ Target not found.", 
-            flags: MessageFlags.Ephemeral // 👈 Fixed Warning
-        });
-    }
+    if (!data) return interaction.reply("❌ Target not found.");
 
     await supabase.from(TABLE).update({ verified: true, expires_at: newDate }).eq("id", data.id);
-    return interaction.reply(`✅ Updated **${target}** to **${duration}**`);
+    return interaction.reply(`✅ **Updated!**\nTarget: ${target}\nDuration: ${duration}\nStatus: Verified`);
   }
 });
 
