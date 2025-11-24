@@ -6,7 +6,8 @@ require("dotenv").config();
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const ADMIN_ID = "1169492860278669312";
+// 👇 Yahan apni ID dhyan se check kar lena
+const ADMIN_ID = "1169492860278669312"; 
 const TABLE = "verifications";
 
 const app = express();
@@ -37,7 +38,6 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN)
 client.once("clientready", async () => {
   console.log(`🤖 Bot Ready: ${client.user.tag}`);
   
-  // Register Slash Command locally to the bot
   try {
     console.log("Started refreshing application (/) commands.");
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
@@ -47,9 +47,9 @@ client.once("clientready", async () => {
   }
 });
 
-// --- HELPER: Parse Duration (e.g., "2d" -> Date Object) ---
+// --- HELPER: Parse Duration ---
 function calculateExpiry(durationStr) {
-  if (durationStr.toLowerCase() === "lifetime") return null; // Null means never expire (logic handle karna padega)
+  if (durationStr.toLowerCase() === "lifetime") return null;
   
   const match = durationStr.match(/^(\d+)([hdmw])$/);
   if (!match) return null;
@@ -73,17 +73,13 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === "setexpiry") {
-    // 1. Check if user is Admin
     if (interaction.user.id !== ADMIN_ID) {
-      return interaction.reply({ content: "❌ Tum ye command use nahi kar sakte!", ephemeral: true });
+      return interaction.reply({ content: "❌ Not Authorized!", ephemeral: true });
     }
 
     const target = interaction.options.getString("target");
     const duration = interaction.options.getString("duration");
 
-    // Calculate new time
-    // Special handling for lifetime: hum code mein bohot aage ka date daal denge ya logic change karenge
-    // Easy way: Lifetime = 100 years
     let newDate;
     if (duration.toLowerCase() === "lifetime") {
         const d = new Date();
@@ -95,23 +91,21 @@ client.on("interactionCreate", async (interaction) => {
 
     if (!newDate) return interaction.reply({ content: "❌ Invalid format! Use: 10m, 24h, 2d, 1w", ephemeral: true });
 
-    // Find row by Code OR HWID
     const { data: existing } = await supabase
       .from(TABLE)
       .select("*")
-      .or(`code.eq.${target},hwid.eq.${target}`) // Search both columns
+      .or(`code.eq.${target},hwid.eq.${target}`)
       .limit(1)
       .maybeSingle();
 
-    if (!existing) return interaction.reply({ content: `❌ Target "${target}" not found in database.`, ephemeral: true });
+    if (!existing) return interaction.reply({ content: `❌ Target "${target}" not found.`, ephemeral: true });
 
-    // Update Database
     await supabase
       .from(TABLE)
       .update({ verified: true, expires_at: newDate })
       .eq("id", existing.id);
 
-    return interaction.reply(`✅ **Updated!**\nTarget: \`${target}\`\nNew Expiry: ${duration} from now.\nStatus: Verified.`);
+    return interaction.reply(`✅ **Updated!**\nTarget: \`${target}\`\nNew Expiry: ${duration}\nStatus: Verified.`);
   }
 });
 
@@ -127,7 +121,6 @@ client.on("messageCreate", async (message) => {
 
   const code = args[1];
 
-  // Find Code
   const { data } = await supabase
     .from(TABLE)
     .select("*")
@@ -139,24 +132,23 @@ client.on("messageCreate", async (message) => {
 
   // Verify User for 24 Hours
   const now = new Date();
-  const expiryTime = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(); // +24 Hours
+  const expiryTime = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   await supabase
     .from(TABLE)
     .update({ verified: true, expires_at: expiryTime })
     .eq("id", data.id);
 
-  return message.reply("✅ Verification Success! Access granted for **24 Hours**.");
+  return message.reply("✅ Success! Access granted for **24 Hours**.");
 });
 
 // ----------------------------------------
-// 🎯 ROBLOX API: /check?hwid=XXX
+// 🎯 ROBLOX API
 // ----------------------------------------
 app.get("/check", async (req, res) => {
   const { hwid } = req.query;
   if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
 
-  // 1. Find User by HWID
   const { data: existing } = await supabase
     .from(TABLE)
     .select("*")
@@ -164,21 +156,16 @@ app.get("/check", async (req, res) => {
     .limit(1)
     .maybeSingle();
 
-  // If user exists
   if (existing) {
     const now = new Date();
-    
-    // Check if Verified AND Time is remaining
+    // Check Expiry
     if (existing.verified === true && existing.expires_at && new Date(existing.expires_at) > now) {
       return res.json({ status: "VALID" });
     }
-
-    // Agar Expire ho gaya hai ya Verified nahi hai
-    // Return SAME code (Code change nahi hoga)
     return res.json({ status: "NEED_VERIFY", code: existing.code });
   }
 
-  // 2. New User -> Create New Record
+  // New User
   const code = Math.floor(100000 + Math.random() * 900000).toString();
 
   await supabase.from(TABLE).insert([
@@ -186,33 +173,15 @@ app.get("/check", async (req, res) => {
       hwid: hwid,
       code: code,
       verified: false,
-      expires_at: null // New user has no access yet
+      expires_at: null
     }
   ]);
 
   return res.json({ status: "NEED_VERIFY", code });
 });
 
-// 🟢 Keep Alive Route
+// 🟢 Keep Alive
 app.get("/", (req, res) => res.send("System Online 🟢"));
 
 client.login(process.env.DISCORD_BOT_TOKEN);
-app.listen(PORT, () => console.log(`🚀 API on Port ${PORT}`));
-  }
-
-  // New User: Create with 24h expiry
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-
-  await supabase.from(TABLE).insert([
-    {
-      hwid: hwid,
-      code: code,
-      verified: false,
-      expires_at: expiresAt // 👈 24h time set
-    }
-  ]);
-
-  return res.json({ status: "NEED_VERIFY", code });
-});
-
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 API Running on Port ${PORT}`));
