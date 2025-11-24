@@ -6,7 +6,7 @@ require("dotenv").config();
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const ADMIN_ID = "1169492860278669312"; // Aapki ID
+const ADMIN_ID = "1169492860278669312"; // Aapki ID Fix hai
 const TABLE = "verifications";
 
 const app = express();
@@ -21,11 +21,11 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds, 
     GatewayIntentBits.GuildMessages, 
-    GatewayIntentBits.MessageContent // ⚠️ Ye Developer Portal pe ON hona chahiye
+    GatewayIntentBits.MessageContent // Message padhne ke liye zaruri hai
   ],
 });
 
-// --- SLASH COMMAND REGISTER (Isse rehne do, future ke liye) ---
+// --- SLASH COMMAND REGISTER (/setexpiry) ---
 const commands = [
   new SlashCommandBuilder()
     .setName("setexpiry")
@@ -47,76 +47,60 @@ client.once("clientready", async () => {
 });
 
 // ---------------------------------------------------------
-// 🛠️ COMMON VERIFICATION FUNCTION (Logic yahan hai)
+// 🛠️ VERIFICATION LOGIC
 // ---------------------------------------------------------
 async function handleVerification(message, code) {
-  // 1. Check Code in DB
-  const { data } = await supabase
-    .from(TABLE)
-    .select("*")
-    .eq("code", code)
-    .limit(1)
-    .maybeSingle();
+  // 1. Check Code
+  const { data } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
 
-  if (!data) {
-    return message.reply("❌ **Invalid Code!** Kripya sahi code check karein.");
-  }
+  if (!data) return message.reply("❌ **Invalid Code!**");
 
   // 2. Set 24 Hours Expiry
   const now = new Date();
   const expiryTime = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   // 3. Update DB
-  await supabase
-    .from(TABLE)
-    .update({ verified: true, expires_at: expiryTime })
-    .eq("id", data.id);
+  await supabase.from(TABLE).update({ verified: true, expires_at: expiryTime }).eq("id", data.id);
 
-  return message.reply(`✅ **Verification Successful!**\nGame Access Granted for **24 Hours**. 🎮`);
+  return message.reply(`✅ **Done Sir!** Verification Successful (24 Hours). 🎮`);
 }
 
 // ---------------------------------------------------------
-// 💬 MESSAGE HANDLER (Commands)
+// 💬 MESSAGE HANDLER (😎 & Verify)
 // ---------------------------------------------------------
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
+  const content = message.content.trim();
 
-  const content = message.content.trim(); // Extra spaces hatane ke liye
-
-  // 👉 CASE 1: "admin 😎" (Conversation Mode)
-  if (content === "admin 😎") {
-    // Sirf aap (Admin) use kar sakein, toh ye line uncomment karein:
-    // if (message.author.id !== ADMIN_ID) return; 
+  // 👉 CASE 1: SPECIAL ADMIN EMOJI "😎"
+  if (content === "😎") {
+    // Check: Kya ye Admin (Aap) hain?
+    if (message.author.id !== ADMIN_ID) return; // Agar koi aur hai to IGNORE
 
     await message.reply("बोलिये सर, आपका टोकन नम्बर क्या है? 🙇‍♂️");
 
-    // Wait for response (1 minute timeout)
-    const filter = (m) => m.author.id === message.author.id;
+    // Wait for Token (60 seconds)
+    const filter = (m) => m.author.id === ADMIN_ID; // Sirf aapka reply sunega
     const collector = message.channel.createMessageCollector({ filter, time: 60000, max: 1 });
 
     collector.on('collect', async (m) => {
       const token = m.content.trim();
-      await handleVerification(m, token); // Call verification logic
+      await handleVerification(m, token);
     });
-    
     return;
   }
 
-  // 👉 CASE 2: "verify 123456" (Direct Mode)
+  // 👉 CASE 2: NORMAL USER (verify 123456)
   if (content.toLowerCase().startsWith("verify")) {
-    const args = content.split(/\s+/); // Split by space
+    const args = content.split(/\s+/);
+    if (args.length < 2) return message.reply("❌ **Use:** `verify 123456`");
     
-    // Agar sirf "verify" likha hai
-    if (args.length < 2) {
-      return message.reply("❌ **Use:** `verify 123456`");
-    }
-
     const code = args[1];
     await handleVerification(message, code);
   }
 });
 
-// --- SLASH COMMAND LOGIC (/setexpiry) ---
+// --- SLASH COMMAND (/setexpiry) ---
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName === "setexpiry") {
@@ -131,12 +115,13 @@ client.on("interactionCreate", async (interaction) => {
         d.setFullYear(d.getFullYear() + 100);
         newDate = d.toISOString();
     } else {
-        // Simple calc logic
         const match = duration.match(/^(\d+)([hdmw])$/);
         if (!match) return interaction.reply({ content: "❌ Invalid format! Use: 24h, 2d", ephemeral: true });
         const val = parseInt(match[1]), unit = match[2], now = new Date();
         if (unit === 'h') now.setHours(now.getHours() + val);
         if (unit === 'd') now.setDate(now.getDate() + val);
+        if (unit === 'm') now.setMinutes(now.getMinutes() + val);
+        if (unit === 'w') now.setDate(now.getDate() + (val * 7));
         newDate = now.toISOString();
     }
 
@@ -148,7 +133,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// --- API & SERVER ---
+// --- API ROUTES ---
 app.get("/check", async (req, res) => {
   const { hwid } = req.query;
   if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
