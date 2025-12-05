@@ -119,7 +119,7 @@ async function handleVerification(message, code) {
   if (!userData) return message.reply("❌ **Invalid Code!** Code check karein.");
   if (userData.is_banned) return message.reply("🚫 **BANNED!** Admin has blocked you.");
 
-  let finalDuration = 18 * 60 * 60 * 1000; // Default 24h
+  let finalDuration = 24 * 60 * 60 * 1000; // Default 24h
   let appliedRule = "Default (24 Hours)";
   let isPunished = false;
 
