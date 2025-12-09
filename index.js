@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-// --- Import Events to fix Deprecation Warning ---
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActivityType, Events } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
@@ -9,12 +8,15 @@ require("dotenv").config();
 const PORT = process.env.PORT || 10000;
 const SUPER_OWNER_ID = "1169492860278669312"; 
 const GUILD_ID = "1257403231127076915"; 
-const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; // Default 18h 🎯
+const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; 
 
 // Database Tables
 const TABLE = "verifications";
 const RULES_TABLE = "role_rules";
 const ADMINS_TABLE = "bot_admins";
+
+// Custom Channel ID for the Ban Warning (from user's request)
+const WARNING_CHANNEL_ID = "1444769950421225542"; 
 
 const app = express();
 app.use(cors());
@@ -37,7 +39,8 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder().setName("verify").setDescription("Verify your game access").addStringOption(o => o.setName("code").setDescription("Enter your 6-digit code").setRequired(true)),
   new SlashCommandBuilder().setName("help").setDescription("Get help regarding verification"),
-  new SlashCommandBuilder().setName("boost").setDescription("Check your current verification boost/status"),
+  new SlashCommandBuilder().setName("boost").setDescription("Check your current verification status").addStringOption(o => o.setName("code").setDescription("Your 6-digit verification code").setRequired(true)), 
+
   new SlashCommandBuilder().setName("activeusers").setDescription("Admin: View currently verified users (Max 25)").addIntegerOption(o => o.setName("page").setDescription("Page number (1+)")),
 
   new SlashCommandBuilder().setName("setexpiry").setDescription("Admin: Manual expiry").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("e.g. 30m, 6h, 2d, +1h").setRequired(true)),
@@ -52,11 +55,9 @@ const commands = [
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
 
-// Fix P2: Using Events.ClientReady (Correct V14/V15 syntax)
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot Logged In as: ${client.user.tag}`);
   client.user.setActivity('Squid Game X', { type: ActivityType.Playing });
-  
   try {
     await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
     console.log("🎉 SUCCESS: All Commands Registered!");
@@ -68,50 +69,40 @@ client.once(Events.ClientReady, async () => {
 // ---------------------------------------------------------
 // 🛠️ HELPER FUNCTIONS
 // ---------------------------------------------------------
-
-// 1. Time Parser (Converts string to milliseconds)
 function parseDuration(durationStr) {
   if (!durationStr) return 0;
   if (durationStr.toLowerCase() === "lifetime") return "LIFETIME";
-  
   const cleanStr = durationStr.startsWith("+") ? durationStr.substring(1) : durationStr;
-  
   const match = cleanStr.match(/^(\d+)([mhdw])$/);
   if (!match) return 0;
-
   const val = parseInt(match[1]);
   const unit = match[2];
   let ms = 0;
-
   if (unit === 'm') ms = val * 60 * 1000;
   if (unit === 'h') ms = val * 60 * 60 * 1000;
   if (unit === 'd') ms = val * 24 * 60 * 60 * 1000;
   if (unit === 'w') ms = val * 7 * 24 * 60 * 60 * 1000;
-  
   return ms;
 }
 
-// 2. Readable Time (ms -> "45 Hours and 30 Minutes") - P4 Fix
 function formatTime(ms) {
   if (ms === "LIFETIME") return "Lifetime";
   if (typeof ms !== 'number' || ms < 0) return 'Expired';
-
   const totalSeconds = Math.floor(ms / 1000);
   const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
 
   let parts = [];
-  if (days > 0) parts.push(`${days} Days`);
-  if (hours > 0) parts.push(`${hours} Hours`);
-  if (minutes > 0) parts.push(`${minutes} Minutes`);
+  if (days > 0) parts.push(`${days} Day${days > 1 ? 's' : ''}`);
+  if (hours > 0) parts.push(`${hours} Hour${hours > 1 ? 's' : ''}`);
+  if (minutes > 0) parts.push(`${minutes} Minute${minutes > 1 ? 's' : ''}`);
   
   if (parts.length === 0) return "Less than a minute";
   
   return parts.join(' and ');
 }
 
-// 3. Admin Check (Database + Super Owner)
 async function isAdmin(userId) {
   if (userId === SUPER_OWNER_ID) return true;
   const { data } = await supabase.from(ADMINS_TABLE).select("*").eq("discord_id", userId).maybeSingle();
@@ -119,15 +110,18 @@ async function isAdmin(userId) {
 }
 
 // ---------------------------------------------------------
-// 🧠 CORE VERIFICATION LOGIC (Fix P1, P2)
+// 🧠 CORE VERIFICATION LOGIC
 // ---------------------------------------------------------
 async function handleVerification(message, code) {
   const { data: userData } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
 
   if (!userData) return message.reply("❌ **Invalid Code!** Code check karein.");
   if (userData.is_banned) return message.reply("🚫 **BANNED!** Admin has blocked you.");
+  
+  // First time check (Before update)
+  const isFirstVerification = !userData.verified;
 
-  let finalDuration = DEFAULT_VERIFY_MS; // Default 18h
+  let finalDuration = DEFAULT_VERIFY_MS;
   let appliedRule = "Default (18 Hours)";
   let isPunished = false;
 
@@ -160,14 +154,13 @@ async function handleVerification(message, code) {
           }
         } 
         
-        // --- STEP 2: NO PUNISHMENT -> MAX WINS + BONUSES (P1 Fix) ---
+        // --- STEP 2: NO PUNISHMENT -> MAX WINS + BONUSES ---
         if (!isPunished) {
           
-          // A. Base Time (Fixed duration rules)
           let maxBase = DEFAULT_VERIFY_MS; 
           let baseName = "Default (18 Hours)";
 
-          const baseRules = activeRules.filter(r => !r.roleName.startsWith("+")); // Filter out bonuses
+          const baseRules = activeRules.filter(r => !r.roleName.startsWith("+"));
 
           baseRules.forEach(r => {
             const ms = parseDuration(r.duration);
@@ -180,18 +173,17 @@ async function handleVerification(message, code) {
             }
           });
 
-          // B. Bonus Time (Roles STARTING with +)
           const bonusRules = activeRules.filter(r => r.roleName.startsWith("+"));
           let totalBonus = 0;
           let bonusNames = [];
 
           if (maxBase !== "LIFETIME") {
              bonusRules.forEach(r => {
-               totalBonus += parseDuration(r.duration); // Already handles + sign internally
+               totalBonus += parseDuration(r.duration); 
                bonusNames.push(r.roleName);
              });
              
-             finalDuration = maxBase + totalBonus; // FINAL CALCULATION FIX!
+             finalDuration = maxBase + totalBonus; 
              
              const baseTimeText = formatTime(maxBase);
              const bonusText = bonusNames.length > 0 ? ` + [${bonusNames.join(", ")}]` : "";
@@ -205,7 +197,6 @@ async function handleVerification(message, code) {
     }
   } catch (e) {
     console.error("Role logic error:", e);
-    // Fallback on default time if role fetch fails
   }
 
   // Calculate Expiry Date
@@ -221,7 +212,8 @@ async function handleVerification(message, code) {
 
   const embedColor = isPunished ? 0xFF0000 : 0x00FF00; 
   
-  return message.reply({
+  // Send Main Verification Reply
+  const mainReply = message.reply({
     embeds: [{
       color: embedColor,
       title: isPunished ? "⚠️ Access Restricted (Punishment)" : "✅ Access Granted!",
@@ -229,6 +221,13 @@ async function handleVerification(message, code) {
       footer: { text: "Squid Game X Verification" }
     }]
   });
+  
+  // --- Send First Time Warning (NEW FEATURE) ---
+  if (isFirstVerification && !isPunished) {
+      message.channel.send(`👋 Welcome, ${message.author.username}! Please read this important step to avoid a ban: **Kindly share your Roblox account username at <#${WARNING_CHANNEL_ID}> to link your verification.**`);
+  }
+  
+  return mainReply;
 }
 
 // ---------------------------------------------------------
@@ -238,7 +237,6 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const content = message.content.trim();
   
-  // P4 FIX: Log message before processing (for deletion proof)
   if (content.toLowerCase().startsWith("verify") || content === "😎") {
       console.log(`[VERIFY ATTEMPT] User: ${message.author.tag} (${message.author.id}) sent: "${content}"`);
   }
@@ -325,12 +323,14 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // F1 Command: /boost
+  // F1 Command: /boost (Keep Public per user demand)
   if (commandName === "boost") {
-    await interaction.deferReply({ ephemeral: true });
-    const { data: userData } = await supabase.from(TABLE).select("*").eq("hwid", interaction.user.id).maybeSingle();
+    const code = interaction.options.getString("code");
+    await interaction.deferReply(); // PUBLIC REPLY
+    
+    const { data: userData } = await supabase.from(TABLE).select("*").eq("code", code).maybeSingle();
 
-    let statusMsg = "ℹ️ No data found. Please run the game and verify first.";
+    let statusMsg = "ℹ️ No data found for that code. Please verify first.";
     
     if (userData) {
       const now = new Date().getTime();
@@ -357,7 +357,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // ADMIN: ACTIVE USERS (F2 Command)
   if (commandName === "activeusers") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const limit = 25;
     const page = interaction.options.getInteger("page") || 1;
     const offset = (page - 1) * limit;
@@ -385,7 +385,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // ADMIN: SET EXPIRY
   if (commandName === "setexpiry") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const duration = interaction.options.getString("duration");
     const ms = parseDuration(duration);
     if (ms === 0) return interaction.editReply({ content: "❌ Invalid! Use: 10m, 24h, 2d" });
@@ -406,21 +406,21 @@ client.on("interactionCreate", async (interaction) => {
 
   // ADMIN: BAN/UNBAN/RESET
   if (commandName === "ban") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
     if (!data) return interaction.editReply("❌ Target not found.");
     await supabase.from(TABLE).update({ is_banned: true, verified: false }).eq("id", data.id);
     return interaction.editReply(`🚫 **BANNED!** Target blocked.`);
   }
   if (commandName === "unban") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
     if (!data) return interaction.editReply("❌ Target not found.");
     await supabase.from(TABLE).update({ is_banned: false }).eq("id", data.id);
     return interaction.editReply(`✅ **Unbanned!**`);
   }
   if (commandName === "resetuser") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
     if (!data) return interaction.editReply("❌ Target not found.");
     await supabase.from(TABLE).delete().eq("id", data.id);
@@ -429,7 +429,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // ADMIN: LOOKUP
   if (commandName === "lookup") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
     if (!data) return interaction.editReply("❌ Target not found.");
     const status = data.is_banned ? "🚫 BANNED" : (data.verified ? "✅ VERIFIED" : "❌ NOT VERIFIED");
@@ -439,9 +439,9 @@ client.on("interactionCreate", async (interaction) => {
 
   // ADMIN: RULES
   if (commandName === "setrule") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const role = interaction.options.getRole("role");
-    const duration = interaction.options.getString("duration"); // e.g., +1h or 24h
+    const duration = interaction.options.getString("duration"); 
     
     const { data: existing } = await supabase.from(RULES_TABLE).select("*").eq("role_id", role.id).maybeSingle();
     if (existing) { await supabase.from(RULES_TABLE).update({ duration: duration }).eq("id", existing.id); } 
@@ -450,14 +450,14 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (commandName === "removerule") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const role = interaction.options.getRole("role");
     await supabase.from(RULES_TABLE).delete().eq("role_id", role.id);
     return interaction.editReply(`✅ **Rule Removed!** for ${role.name}`);
   }
 
   if (commandName === "listrules") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(); // PUBLIC REPLY
     const { data: rules } = await supabase.from(RULES_TABLE).select("*");
     if (!rules || rules.length === 0) return interaction.editReply("ℹ️ No active rules.");
     
