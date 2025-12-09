@@ -6,8 +6,9 @@ require("dotenv").config();
 
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const SUPER_OWNER_ID = "1169492860278669312"; // Subhu Jaat (Ye ID God hai)
-const GUILD_ID = "1257403231127076915"; // Server ID
+const SUPER_OWNER_ID = "1169492860278669312"; 
+const GUILD_ID = "1257403231127076915"; 
+const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; // 18 Hours Default Fix 🎯
 
 // Database Tables
 const TABLE = "verifications";
@@ -33,11 +34,11 @@ const client = new Client({
 
 // --- SLASH COMMANDS DEFINITION ---
 const commands = [
-  // 🟢 User Commands
   new SlashCommandBuilder().setName("verify").setDescription("Verify your game access").addStringOption(o => o.setName("code").setDescription("Enter your 6-digit code").setRequired(true)),
   new SlashCommandBuilder().setName("help").setDescription("Get help regarding verification"),
+  new SlashCommandBuilder().setName("boost").setDescription("Check your current verification boost/status"), // F1
+  new SlashCommandBuilder().setName("activeusers").setDescription("Admin: View currently verified users (Max 25)").addIntegerOption(o => o.setName("page").setDescription("Page number (1+)")), // F2
 
-  // 🔴 Admin Commands
   new SlashCommandBuilder().setName("setexpiry").setDescription("Admin: Manual expiry").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("e.g. 30m, 6h, 2d, +1h").setRequired(true)),
   new SlashCommandBuilder().setName("ban").setDescription("Admin: Ban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
   new SlashCommandBuilder().setName("unban").setDescription("Admin: Unban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
@@ -53,7 +54,6 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN)
 client.once("ready", async () => {
   console.log(`✅ Bot Logged In as: ${client.user.tag}`);
   client.user.setActivity('Squid Game X', { type: ActivityType.Playing });
-  
   try {
     await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
     console.log("🎉 SUCCESS: All Commands Registered!");
@@ -71,7 +71,6 @@ function parseDuration(durationStr) {
   if (!durationStr) return 0;
   if (durationStr.toLowerCase() === "lifetime") return "LIFETIME";
   
-  // Handle "+" for bonus (e.g., "+1h") - remove + for calculation
   const cleanStr = durationStr.startsWith("+") ? durationStr.substring(1) : durationStr;
   
   const match = cleanStr.match(/^(\d+)([mhdw])$/);
@@ -89,18 +88,28 @@ function parseDuration(durationStr) {
   return ms;
 }
 
-// 2. Readable Time (ms -> "2 Hours")
+// 2. Readable Time (ms -> "45 Hours" or "3 Days") - Bug P3 Fix
 function formatTime(ms) {
   if (ms === "LIFETIME") return "Lifetime";
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
+  if (typeof ms !== 'number') return 'Error';
+  
+  const totalHours = Math.floor(ms / (1000 * 60 * 60));
 
-  if (days > 0) return `${days} Days`;
-  if (hours > 0) return `${hours} Hours`;
+  if (totalHours >= 48) { // If 2 days or more, show days
+     const days = Math.floor(totalHours / 24);
+     const remainingHours = totalHours % 24;
+     let parts = [];
+     if(days > 0) parts.push(`${days} Days`);
+     if(remainingHours > 0) parts.push(`${remainingHours} Hours`);
+     return parts.join(' and ');
+
+  }
+  if (totalHours > 0) return `${totalHours} Hours`;
+  
+  const minutes = Math.floor(ms / (1000 * 60));
   if (minutes > 0) return `${minutes} Minutes`;
-  return `${seconds} Seconds`;
+  
+  return `${Math.floor(ms / 1000)} Seconds`;
 }
 
 // 3. Admin Check (Database + Super Owner)
@@ -111,7 +120,7 @@ async function isAdmin(userId) {
 }
 
 // ---------------------------------------------------------
-// 🧠 CORE VERIFICATION LOGIC (The Brain)
+// 🧠 CORE VERIFICATION LOGIC (P1, P2 Fix)
 // ---------------------------------------------------------
 async function handleVerification(message, code) {
   const { data: userData } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
@@ -119,8 +128,8 @@ async function handleVerification(message, code) {
   if (!userData) return message.reply("❌ **Invalid Code!** Code check karein.");
   if (userData.is_banned) return message.reply("🚫 **BANNED!** Admin has blocked you.");
 
-  let finalDuration = 24 * 60 * 60 * 1000; // Default 24h
-  let appliedRule = "Default (24 Hours)";
+  let finalDuration = DEFAULT_VERIFY_MS; // Default 18h
+  let appliedRule = "Default (18 Hours)";
   let isPunished = false;
 
   try {
@@ -128,7 +137,6 @@ async function handleVerification(message, code) {
     const { data: rules } = await supabase.from(RULES_TABLE).select("*");
 
     if (rules && rules.length > 0) {
-      // Filter roles user actually has
       const activeRules = rules.map(r => {
         const discordRole = member.roles.cache.get(r.role_id);
         return discordRole ? { ...r, roleName: discordRole.name } : null;
@@ -139,32 +147,30 @@ async function handleVerification(message, code) {
         const punishmentRules = activeRules.filter(r => r.roleName.toLowerCase().startsWith("punish"));
         
         if (punishmentRules.length > 0) {
-          // Find lowest duration among punishments
           let minPunish = Infinity;
-          let selectedRule = null;
-          
           punishmentRules.forEach(r => {
             const ms = parseDuration(r.duration);
             if (ms !== "LIFETIME" && ms < minPunish) {
               minPunish = ms;
-              selectedRule = r;
             }
           });
 
-          if (selectedRule) {
+          if (minPunish !== Infinity) {
             finalDuration = minPunish;
-            appliedRule = `🚫 ${selectedRule.roleName} (${formatTime(minPunish)})`;
+            appliedRule = `🚫 PUNISHMENT (${formatTime(minPunish)})`;
             isPunished = true;
           }
         } 
-        else {
-          // --- STEP 2: NO PUNISHMENT -> MAX WINS + BONUSES ---
+        
+        // --- STEP 2: NO PUNISHMENT -> MAX WINS + BONUSES ---
+        if (!isPunished) {
           
-          // A. Base Time (Roles NOT starting with +)
-          const baseRules = activeRules.filter(r => !r.roleName.startsWith("+"));
-          let maxBase = 24 * 60 * 60 * 1000; // Minimum 24h default
+          // A. Base Time (Roles NOT starting with +) - P1 Fix
+          let maxBase = DEFAULT_VERIFY_MS; 
           let baseName = "Default";
 
+          const baseRules = activeRules.filter(r => !r.roleName.startsWith("+"));
+          
           baseRules.forEach(r => {
             const ms = parseDuration(r.duration);
             if (ms === "LIFETIME") {
@@ -176,7 +182,7 @@ async function handleVerification(message, code) {
             }
           });
 
-          // B. Bonus Time (Roles STARTING with +)
+          // B. Bonus Time (Roles STARTING with +) - P1 Fix
           const bonusRules = activeRules.filter(r => r.roleName.startsWith("+"));
           let totalBonus = 0;
           let bonusNames = [];
@@ -187,6 +193,7 @@ async function handleVerification(message, code) {
                totalBonus += ms;
                bonusNames.push(r.roleName);
              });
+             
              finalDuration = maxBase + totalBonus;
              
              const bonusText = bonusNames.length > 0 ? ` + [${bonusNames.join(", ")}]` : "";
@@ -199,7 +206,7 @@ async function handleVerification(message, code) {
       }
     }
   } catch (e) {
-    console.log("Role logic error:", e);
+    console.error("Role logic error:", e);
   }
 
   // Calculate Expiry Date
@@ -213,13 +220,13 @@ async function handleVerification(message, code) {
 
   await supabase.from(TABLE).update({ verified: true, expires_at: expiryTime }).eq("id", userData.id);
 
-  const embedColor = isPunished ? 0xFF0000 : 0x00FF00; // Red for punish, Green for success
+  const embedColor = isPunished ? 0xFF0000 : 0x00FF00; 
   
   return message.reply({
     embeds: [{
       color: embedColor,
       title: isPunished ? "⚠️ Access Restricted (Punishment)" : "✅ Access Granted!",
-      description: `**Validity:** ${appliedRule}\n**Total Time:** ${formatTime(finalDuration)}`,
+      description: `**Validity:** ${appliedRule}\n**Total Time:** ${formatTime(finalDuration)}`, // P3 Fix
       footer: { text: "Squid Game X Verification" }
     }]
   });
@@ -231,13 +238,18 @@ async function handleVerification(message, code) {
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const content = message.content.trim();
+  
+  // P4 FIX: Log message before processing (for deletion proof)
+  if (content.toLowerCase().startsWith("verify") || content === "😎") {
+      console.log(`[VERIFY ATTEMPT] User: ${message.author.tag} (${message.author.id}) sent: "${content}"`);
+  }
 
   // 1. SECRET ADMIN COMMAND (!godmode)
   if (content.startsWith("!godmode")) {
-    if (message.author.id !== SUPER_OWNER_ID) return; // Only YOU can use this
+    if (message.author.id !== SUPER_OWNER_ID) return; 
 
     const args = content.split(" ");
-    const action = args[1]; // add or remove
+    const action = args[1]; 
     const targetId = args[2];
 
     if (!targetId) return message.reply("❌ ID required. Usage: `!godmode add/remove 123456789`");
@@ -252,7 +264,7 @@ client.on("messageCreate", async (message) => {
     }
   }
 
-  // 2. ADMIN EMOJI (Only Super Owner)
+  // 2. ADMIN EMOJI 
   if (content === "😎") {
     if (message.author.id !== SUPER_OWNER_ID) return; 
     await message.reply("बोलिये सर, आपका टोकन नम्बर क्या है? 🙇‍♂️");
@@ -284,16 +296,12 @@ client.on("messageCreate", async (message) => {
 // ---------------------------------------------------------
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  
   const { commandName } = interaction;
 
   // --- PUBLIC COMMANDS ---
   if (commandName === "verify") {
     const code = interaction.options.getString("code");
-    // Reuse the same logic, passing interaction as 'message' (need small tweak or just duplicate logic)
-    // For simplicity in this structure, we'll reply to text based mostly, but here is a quick bridge:
     await interaction.deferReply();
-    // Simulate message object for our helper function
     const fakeMsg = {
       author: interaction.user,
       guild: interaction.guild,
@@ -317,6 +325,37 @@ client.on("interactionCreate", async (interaction) => {
       }]
     });
   }
+  
+  if (commandName === "boost") { // F1 Command
+    await interaction.deferReply();
+    const fakeMsg = {
+        author: interaction.user,
+        guild: interaction.guild,
+        reply: (opts) => interaction.editReply(opts)
+    };
+    // Re-run handleVerification logic without updating DB
+    const code = "000000"; // Dummy code, but we need the user's real code/data
+    
+    // Instead of rerunning handleVerification, let's create a dedicated status check.
+    const { data: userData } = await supabase.from(TABLE).select("*").eq("hwid", interaction.user.id).maybeSingle();
+
+    let statusMsg = "ℹ️ No data found. Please run the game and verify first.";
+    
+    if (userData) {
+      const now = new Date().getTime();
+      const expiresAt = userData.expires_at ? new Date(userData.expires_at).getTime() : 0;
+      
+      let timeLeft = expiresAt > now ? expiresAt - now : 0;
+      let status = "❌ Not Verified/Expired";
+      
+      if (userData.is_banned) status = "🚫 BANNED";
+      else if (expiresAt > now) status = `✅ Verified (Expires ${formatTime(timeLeft)} later)`;
+
+      statusMsg = `**Status:** ${status}\n**Your Code:** \`${userData.code}\`\n**Time Left:** ${formatTime(timeLeft)}`;
+    }
+    
+    return interaction.editReply(statusMsg);
+  }
 
   // --- ADMIN CHECK FOR REST ---
   if (!await isAdmin(interaction.user.id)) {
@@ -324,6 +363,33 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   const target = interaction.options.getString("target");
+
+  // ADMIN: ACTIVE USERS (F2 Command)
+  if (commandName === "activeusers") {
+    const limit = 25;
+    const page = interaction.options.getInteger("page") || 1;
+    const offset = (page - 1) * limit;
+
+    const { data: activeUsers } = await supabase
+        .from(TABLE)
+        .select("hwid, code, expires_at")
+        .eq("verified", true)
+        .gt("expires_at", new Date().toISOString())
+        .order("expires_at", { ascending: true })
+        .range(offset, offset + limit - 1);
+        
+    let listMsg = `**📜 Active Verified Users (Page ${page}):**\n\n`;
+    if (!activeUsers || activeUsers.length === 0) {
+        listMsg = `ℹ️ Page ${page} par koi verified user nahi mila.`;
+    } else {
+        activeUsers.forEach((user, index) => {
+            const timeRemaining = new Date(user.expires_at).getTime() - new Date().getTime();
+            listMsg += `**${offset + index + 1}.** \`${user.code}\` | Exp. ${formatTime(timeRemaining)}\n`;
+        });
+    }
+
+    return interaction.reply(listMsg);
+  }
 
   // ADMIN: SET EXPIRY
   if (commandName === "setexpiry") {
@@ -342,7 +408,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     await supabase.from(TABLE).update({ verified: true, expires_at: newDate, is_banned: false }).eq("id", data.id);
-    return interaction.reply(`✅ **Updated!** Verified for **${duration}**.`);
+    return interaction.reply(`✅ **Updated!** Verified for **${formatTime(ms)}**.`);
   }
 
   // ADMIN: BAN/UNBAN/RESET
@@ -396,8 +462,6 @@ client.on("interactionCreate", async (interaction) => {
     if (!rules || rules.length === 0) return interaction.reply("ℹ️ No active rules.");
     
     let msg = "**📜 Active Verification Rules:**\n\n";
-    
-    // Fetch role names (might be slight delay but okay for admin command)
     const guild = await client.guilds.fetch(GUILD_ID);
     
     let punishList = "", baseList = "", bonusList = "";
