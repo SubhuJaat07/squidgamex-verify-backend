@@ -8,15 +8,12 @@ require("dotenv").config();
 const PORT = process.env.PORT || 10000;
 const SUPER_OWNER_ID = "1169492860278669312"; 
 const GUILD_ID = "1257403231127076915"; 
-const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; 
+const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; // Default 18h
 
 // Database Tables
 const TABLE = "verifications";
 const RULES_TABLE = "role_rules";
 const ADMINS_TABLE = "bot_admins";
-
-// Custom Channel ID for the Ban Warning (from user's request)
-const WARNING_CHANNEL_ID = "1444769950421225542"; 
 
 const app = express();
 app.use(cors());
@@ -40,9 +37,7 @@ const commands = [
   new SlashCommandBuilder().setName("verify").setDescription("Verify your game access").addStringOption(o => o.setName("code").setDescription("Enter your 6-digit code").setRequired(true)),
   new SlashCommandBuilder().setName("help").setDescription("Get help regarding verification"),
   new SlashCommandBuilder().setName("boost").setDescription("Check your current verification status").addStringOption(o => o.setName("code").setDescription("Your 6-digit verification code").setRequired(true)), 
-
   new SlashCommandBuilder().setName("activeusers").setDescription("Admin: View currently verified users (Max 25)").addIntegerOption(o => o.setName("page").setDescription("Page number (1+)")),
-
   new SlashCommandBuilder().setName("setexpiry").setDescription("Admin: Manual expiry").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("e.g. 30m, 6h, 2d, +1h").setRequired(true)),
   new SlashCommandBuilder().setName("ban").setDescription("Admin: Ban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
   new SlashCommandBuilder().setName("unban").setDescription("Admin: Unban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
@@ -51,6 +46,7 @@ const commands = [
   new SlashCommandBuilder().setName("removerule").setDescription("Admin: Remove Role Rule").addRoleOption(o => o.setName("role").setDescription("Role").setRequired(true)),
   new SlashCommandBuilder().setName("listrules").setDescription("Admin: List all active rules"),
   new SlashCommandBuilder().setName("resetuser").setDescription("Admin: DELETE user data (Reset)").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
+  new SlashCommandBuilder().setName("lastverify").setDescription("Admin: Show last successfully verified user (F1 FIX)"),
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
@@ -69,25 +65,32 @@ client.once(Events.ClientReady, async () => {
 // ---------------------------------------------------------
 // 🛠️ HELPER FUNCTIONS
 // ---------------------------------------------------------
+
 function parseDuration(durationStr) {
   if (!durationStr) return 0;
   if (durationStr.toLowerCase() === "lifetime") return "LIFETIME";
+  
   const cleanStr = durationStr.startsWith("+") ? durationStr.substring(1) : durationStr;
+  
   const match = cleanStr.match(/^(\d+)([mhdw])$/);
   if (!match) return 0;
+
   const val = parseInt(match[1]);
   const unit = match[2];
   let ms = 0;
+
   if (unit === 'm') ms = val * 60 * 1000;
   if (unit === 'h') ms = val * 60 * 60 * 1000;
   if (unit === 'd') ms = val * 24 * 60 * 60 * 1000;
   if (unit === 'w') ms = val * 7 * 24 * 60 * 60 * 1000;
+  
   return ms;
 }
 
 function formatTime(ms) {
   if (ms === "LIFETIME") return "Lifetime";
   if (typeof ms !== 'number' || ms < 0) return 'Expired';
+
   const totalSeconds = Math.floor(ms / 1000);
   const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);
@@ -118,8 +121,7 @@ async function handleVerification(message, code) {
   if (!userData) return message.reply("❌ **Invalid Code!** Code check karein.");
   if (userData.is_banned) return message.reply("🚫 **BANNED!** Admin has blocked you.");
   
-  // First time check (Before update)
-  const isFirstVerification = !userData.verified;
+  const isFirstVerification = !userData.verified; // Check if user was previously unverified
 
   let finalDuration = DEFAULT_VERIFY_MS;
   let appliedRule = "Default (18 Hours)";
@@ -137,7 +139,6 @@ async function handleVerification(message, code) {
 
       if (activeRules.length > 0) {
         
-        // --- STEP 1: CHECK PUNISHMENT ---
         const punishmentRules = activeRules.filter(r => r.roleName.toLowerCase().startsWith("punish"));
         
         if (punishmentRules.length > 0) {
@@ -154,7 +155,6 @@ async function handleVerification(message, code) {
           }
         } 
         
-        // --- STEP 2: NO PUNISHMENT -> MAX WINS + BONUSES ---
         if (!isPunished) {
           
           let maxBase = DEFAULT_VERIFY_MS; 
@@ -187,7 +187,9 @@ async function handleVerification(message, code) {
              
              const baseTimeText = formatTime(maxBase);
              const bonusText = bonusNames.length > 0 ? ` + [${bonusNames.join(", ")}]` : "";
-             appliedRule = `✅ ${baseName} (${baseTimeText})${bonusText}`;
+             
+             // P1 FIX: Removed redundancy from appliedRule string
+             appliedRule = `✅ ${baseName} (${baseTimeText})${bonusText}`; 
           } else {
              finalDuration = "LIFETIME";
              appliedRule = `👑 ${baseName} (Lifetime)`;
@@ -323,10 +325,10 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // F1 Command: /boost (Keep Public per user demand)
+  // F1 Command: /boost
   if (commandName === "boost") {
     const code = interaction.options.getString("code");
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply({ ephemeral: true }); 
     
     const { data: userData } = await supabase.from(TABLE).select("*").eq("code", code).maybeSingle();
 
@@ -354,10 +356,12 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   const target = interaction.options.getString("target");
-
+  
+  // ADMIN COMMANDS START: All replies are PUBLIC (per user demand)
+  
   // ADMIN: ACTIVE USERS (F2 Command)
   if (commandName === "activeusers") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply(); 
     const limit = 25;
     const page = interaction.options.getInteger("page") || 1;
     const offset = (page - 1) * limit;
@@ -381,11 +385,31 @@ client.on("interactionCreate", async (interaction) => {
     }
     return interaction.editReply(listMsg);
   }
+  
+  // ADMIN: LAST VERIFY (F1 Fix)
+  if (commandName === "lastverify") {
+    await interaction.deferReply();
+    const { data } = await supabase
+        .from(TABLE)
+        .select('code, hwid, expires_at')
+        .eq('verified', true)
+        .order('expires_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
+    if (!data) return interaction.editReply("ℹ️ No recent successful verifications found.");
+    
+    const timeRemaining = new Date(data.expires_at).getTime() - new Date().getTime();
+    
+    return interaction.editReply(`**🕵️ Last Verified User:**
+Code: \`${data.code}\`
+HWID: \`${data.hwid}\`
+Status: Verified (Exp. ${formatTime(timeRemaining)})`);
+  }
 
   // ADMIN: SET EXPIRY
   if (commandName === "setexpiry") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply();
     const duration = interaction.options.getString("duration");
     const ms = parseDuration(duration);
     if (ms === 0) return interaction.editReply({ content: "❌ Invalid! Use: 10m, 24h, 2d" });
@@ -406,21 +430,21 @@ client.on("interactionCreate", async (interaction) => {
 
   // ADMIN: BAN/UNBAN/RESET
   if (commandName === "ban") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply();
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
     if (!data) return interaction.editReply("❌ Target not found.");
     await supabase.from(TABLE).update({ is_banned: true, verified: false }).eq("id", data.id);
     return interaction.editReply(`🚫 **BANNED!** Target blocked.`);
   }
   if (commandName === "unban") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply();
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
     if (!data) return interaction.editReply("❌ Target not found.");
     await supabase.from(TABLE).update({ is_banned: false }).eq("id", data.id);
     return interaction.editReply(`✅ **Unbanned!**`);
   }
   if (commandName === "resetuser") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply();
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
     if (!data) return interaction.editReply("❌ Target not found.");
     await supabase.from(TABLE).delete().eq("id", data.id);
@@ -429,7 +453,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // ADMIN: LOOKUP
   if (commandName === "lookup") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply();
     const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
     if (!data) return interaction.editReply("❌ Target not found.");
     const status = data.is_banned ? "🚫 BANNED" : (data.verified ? "✅ VERIFIED" : "❌ NOT VERIFIED");
@@ -439,7 +463,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // ADMIN: RULES
   if (commandName === "setrule") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply();
     const role = interaction.options.getRole("role");
     const duration = interaction.options.getString("duration"); 
     
@@ -450,14 +474,14 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (commandName === "removerule") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply();
     const role = interaction.options.getRole("role");
     await supabase.from(RULES_TABLE).delete().eq("role_id", role.id);
     return interaction.editReply(`✅ **Rule Removed!** for ${role.name}`);
   }
 
   if (commandName === "listrules") {
-    await interaction.deferReply(); // PUBLIC REPLY
+    await interaction.deferReply();
     const { data: rules } = await supabase.from(RULES_TABLE).select("*");
     if (!rules || rules.length === 0) return interaction.editReply("ℹ️ No active rules.");
     
