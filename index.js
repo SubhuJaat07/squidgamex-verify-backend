@@ -11,7 +11,7 @@ const GUILD_ID = "1257403231127076915";
 const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; // 18 Hours Default
 const WARNING_CHANNEL_ID = "1444769950421225542"; 
 
-// Tables
+// Database Tables
 const TABLE = "verifications";
 const RULES_TABLE = "role_rules";
 const ADMINS_TABLE = "bot_admins";
@@ -20,6 +20,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// --- SUPABASE & DISCORD SETUP ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 const client = new Client({
@@ -39,7 +40,7 @@ const commands = [
   new SlashCommandBuilder().setName("boost").setDescription("Check your role-based boosts & potential time"),
 
   // Admin Commands
-  new SlashCommandBuilder().setName("activeusers").setDescription("Admin: View currently verified users with Names").addIntegerOption(o => o.setName("page").setDescription("Page number")),
+  new SlashCommandBuilder().setName("activeusers").setDescription("Admin: View currently verified users").addIntegerOption(o => o.setName("page").setDescription("Page number")),
   new SlashCommandBuilder().setName("setexpiry").setDescription("Admin: Manual expiry").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Time (e.g. 2d)").setRequired(true)),
   new SlashCommandBuilder().setName("ban").setDescription("Admin: Ban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
   new SlashCommandBuilder().setName("unban").setDescription("Admin: Unban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
@@ -56,7 +57,6 @@ client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot Logged In as: ${client.user.tag}`);
   client.user.setActivity('Squid Game X', { type: ActivityType.Playing });
   try {
-    // Refreshing commands to remove duplicates if they exist on Guild level
     await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
     console.log("🎉 SUCCESS: All Commands Registered!");
   } catch (error) {
@@ -64,7 +64,7 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// --- HELPERS ---
+// --- HELPER FUNCTIONS ---
 
 function parseDuration(durationStr) {
   if (!durationStr) return 0;
@@ -109,9 +109,7 @@ async function isAdmin(userId) {
   return !!data;
 }
 
-// ---------------------------------------------------------
-// 🧠 LOGIC: Calculate Duration Based on Roles
-// ---------------------------------------------------------
+// --- CORE LOGIC: Calculate Duration ---
 async function calculateUserDuration(member, rules) {
   let activeRules = rules.map(r => {
     const discordRole = member.roles.cache.get(r.role_id);
@@ -122,7 +120,7 @@ async function calculateUserDuration(member, rules) {
     return { duration: DEFAULT_VERIFY_MS, ruleText: "Default (18h)", isPunished: false };
   }
 
-  // 1. Punishment Check
+  // 1. Punishment
   const punishments = activeRules.filter(r => r.roleName.toLowerCase().startsWith("punish"));
   if (punishments.length > 0) {
     let minMs = Infinity;
@@ -134,7 +132,7 @@ async function calculateUserDuration(member, rules) {
     return { duration: minMs, ruleText: `🚫 ${selectedRule.roleName} (${formatTime(minMs)})`, isPunished: true };
   }
 
-  // 2. Base + Bonus Logic
+  // 2. Base + Bonus
   const bases = activeRules.filter(r => !r.duration.startsWith("+"));
   const bonuses = activeRules.filter(r => r.duration.startsWith("+"));
 
@@ -165,9 +163,7 @@ async function calculateUserDuration(member, rules) {
   return { duration: finalDuration, ruleText, isPunished: false };
 }
 
-// ---------------------------------------------------------
-// 🧠 VERIFICATION HANDLER
-// ---------------------------------------------------------
+// --- VERIFY HANDLER ---
 async function handleVerification(message, code) {
   const { data: userData } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
 
@@ -196,11 +192,11 @@ async function handleVerification(message, code) {
     expiryTime = new Date(new Date().getTime() + duration).toISOString();
   }
 
-  // UPDATE DB WITH DISCORD_ID
+  // Update DB including Discord ID
   await supabase.from(TABLE).update({ 
     verified: true, 
     expires_at: expiryTime,
-    discord_id: message.author.id // Saving User ID here
+    discord_id: message.author.id 
   }).eq("id", userData.id);
 
   const embedColor = isPunished ? 0xFF0000 : 0x00FF00; 
@@ -222,7 +218,7 @@ async function handleVerification(message, code) {
   return mainReply;
 }
 
-// --- MESSAGE HANDLER ---
+// --- MESSAGE HANDLER (Text) ---
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const content = message.content.trim();
@@ -270,7 +266,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (commandName === "boost") {
-    await interaction.deferReply(); // Public as per request
+    await interaction.deferReply();
     try {
       const member = await interaction.guild.members.fetch(interaction.user.id);
       const { data: rules } = await supabase.from(RULES_TABLE).select("*");
@@ -311,6 +307,7 @@ client.on("interactionCreate", async (interaction) => {
        else baseArr.push(obj);
     }
 
+    // Sorting Logic
     baseArr.sort((a, b) => (b.ms === "LIFETIME" ? 1 : b.ms - a.ms)); 
     bonusArr.sort((a, b) => b.ms - a.ms); 
     punishArr.sort((a, b) => a.ms - b.ms); 
@@ -323,14 +320,12 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.editReply(msg);
   }
 
-  // UPDATED ACTIVE USERS (Show Name)
   if (commandName === "activeusers") {
     await interaction.deferReply(); 
     const limit = 25;
     const page = interaction.options.getInteger("page") || 1;
     const offset = (page - 1) * limit;
     
-    // Fetch discord_id as well
     const { data: activeUsers } = await supabase.from(TABLE)
       .select("code, expires_at, discord_id") 
       .eq("verified", true)
@@ -343,7 +338,6 @@ client.on("interactionCreate", async (interaction) => {
     else {
         activeUsers.forEach((u, i) => {
              const left = new Date(u.expires_at).getTime() - Date.now();
-             // Show User Mention
              const userStr = u.discord_id ? `<@${u.discord_id}>` : "Unknown";
              listMsg += `**${offset + i + 1}.** \`${u.code}\` | ${userStr} | ${formatTime(left)}\n`;
         });
@@ -351,7 +345,7 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.editReply(listMsg);
   }
 
-  // ... (Other admin commands remain same)
+  // Admin Actions (Ban, Unban, etc.)
   if (commandName === "setexpiry") {
     await interaction.deferReply();
     const duration = interaction.options.getString("duration");
@@ -414,6 +408,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
+// --- API ---
 app.get("/check", async (req, res) => {
   const { hwid } = req.query;
   if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
@@ -429,23 +424,20 @@ app.get("/check", async (req, res) => {
 });
 
 app.get("/", (req, res) => res.send("System Online 🟢"));
+
+// --- LOGIN & ANTI-CRASH (SINGLE ENTRY) ---
 client.login(process.env.DISCORD_BOT_TOKEN);
 app.listen(PORT, () => console.log(`🚀 API Running on Port ${PORT}`));
-// ---------------------------------------------------------
-// 🛡️ ANTI-CRASH SYSTEM
-// ---------------------------------------------------------
+
 process.on('unhandledRejection', (reason, p) => {
     console.log(' [antiCrash] :: Unhandled Rejection/Catch');
     console.log(reason, p);
 });
-
 process.on("uncaughtException", (err, origin) => {
     console.log(' [antiCrash] :: Uncaught Exception/Catch');
     console.log(err, origin);
 });
-
 process.on('uncaughtExceptionMonitor', (err, origin) => {
     console.log(' [antiCrash] :: Uncaught Exception/Catch (MONITOR)');
     console.log(err, origin);
 });
-
