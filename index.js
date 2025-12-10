@@ -441,3 +441,31 @@ process.on('uncaughtExceptionMonitor', (err, origin) => {
     console.log(' [antiCrash] :: Uncaught Exception/Catch (MONITOR)');
     console.log(err, origin);
 });
+// --- LOGIN & ANTI-CRASH (DEBUG MODE) ---
+
+console.log("🔄 Attempting to log in to Discord...");
+
+client.login(process.env.DISCORD_BOT_TOKEN)
+  .then(() => {
+    console.log("✅ LOGIN SUCCESSFUL! Bot should be online.");
+  })
+  .catch((err) => {
+    console.error("❌ LOGIN FAILED! Error Details:");
+    console.error(err);
+  });
+
+app.listen(PORT, () => console.log(`🚀 API Running on Port ${PORT}`));
+
+// Anti-Crash System
+process.on('unhandledRejection', (reason, p) => {
+    console.log(' [antiCrash] :: Unhandled Rejection/Catch');
+    console.log(reason, p);
+});
+process.on("uncaughtException", (err, origin) => {
+    console.log(' [antiCrash] :: Uncaught Exception/Catch');
+    console.log(err, origin);
+});
+process.on('uncaughtExceptionMonitor', (err, origin) => {
+    console.log(' [antiCrash] :: Uncaught Exception/Catch (MONITOR)');
+    console.log(err, origin);
+});
