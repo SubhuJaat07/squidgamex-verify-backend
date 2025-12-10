@@ -431,16 +431,6 @@ app.get("/check", async (req, res) => {
 app.get("/", (req, res) => res.send("System Online 🟢"));
 client.login(process.env.DISCORD_BOT_TOKEN);
 app.listen(PORT, () => console.log(`🚀 API Running on Port ${PORT}`));
-// ... Upar tumhara baaki code ...
-
-app.get("/", (req, res) => res.send("System Online 🟢"));
-
-// Ye rahi wo lines jo abhi last mein hain
-client.login(process.env.DISCORD_BOT_TOKEN);
-app.listen(PORT, () => console.log(`🚀 API Running on Port ${PORT}`));
-
-// 👇 ISKE NICHE YAHAN PASTE KAR DO (Anti-Crash Code) 👇
-
 // ---------------------------------------------------------
 // 🛡️ ANTI-CRASH SYSTEM
 // ---------------------------------------------------------
