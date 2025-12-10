@@ -37,7 +37,7 @@ const commands = [
   new SlashCommandBuilder().setName("verify").setDescription("Verify your game access").addStringOption(o => o.setName("code").setDescription("Enter your 6-digit code").setRequired(true)),
   new SlashCommandBuilder().setName("help").setDescription("Get help regarding verification"),
   new SlashCommandBuilder().setName("boost").setDescription("Check your role-based boosts & potential time"),
-  new SlashCommandBuilder().setName("activeusers").setDescription("Admin: View currently verified users").addIntegerOption(o => o.setName("page").setDescription("Page number")),
+  new SlashCommandBuilder().setName("activeusers").setDescription("Admin: View currently verified users (No Ping)").addIntegerOption(o => o.setName("page").setDescription("Page number")),
   new SlashCommandBuilder().setName("setexpiry").setDescription("Admin: Manual expiry").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Time (e.g. 2d)").setRequired(true)),
   new SlashCommandBuilder().setName("ban").setDescription("Admin: Ban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
   new SlashCommandBuilder().setName("unban").setDescription("Admin: Unban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
@@ -255,20 +255,44 @@ client.on("interactionCreate", async (interaction) => {
 
   if (!await isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Not Admin!", ephemeral: true });
 
+  // --- UPDATED ACTIVE USERS (NO PING) ---
   if (commandName === "activeusers") {
     await interaction.deferReply(); 
     const limit = 25;
     const page = interaction.options.getInteger("page") || 1;
     const offset = (page - 1) * limit;
-    const { data: activeUsers } = await supabase.from(TABLE).select("code, expires_at, discord_id").eq("verified", true).gt("expires_at", new Date().toISOString()).order("expires_at", { ascending: true }).range(offset, offset + limit - 1);
+    
+    const { data: activeUsers } = await supabase.from(TABLE)
+        .select("code, expires_at, discord_id")
+        .eq("verified", true)
+        .gt("expires_at", new Date().toISOString())
+        .order("expires_at", { ascending: true })
+        .range(offset, offset + limit - 1);
+
     let listMsg = `**📜 Active Users (Page ${page}):**\n\n`;
-    if (!activeUsers || !activeUsers.length) listMsg += "No users found.";
-    else {
-        activeUsers.forEach((u, i) => {
+    
+    if (!activeUsers || !activeUsers.length) {
+        listMsg += "No users found.";
+    } else {
+        // Fetch usernames to avoid pinging
+        const lines = await Promise.all(activeUsers.map(async (u, i) => {
              const left = new Date(u.expires_at).getTime() - Date.now();
-             const userStr = u.discord_id ? `<@${u.discord_id}>` : "Unknown";
-             listMsg += `**${offset + i + 1}.** \`${u.code}\` | ${userStr} | ${formatTime(left)}\n`;
-        });
+             let userDisplay = "Unknown";
+             
+             if (u.discord_id) {
+                 try {
+                     // Try to fetch user to get their name
+                     const user = client.users.cache.get(u.discord_id) || await client.users.fetch(u.discord_id);
+                     userDisplay = `**@${user.username}**`; // Show Name (No Ping)
+                 } catch (e) {
+                     userDisplay = `\`${u.discord_id}\``; // Fallback to ID if not found
+                 }
+             }
+             
+             return `**${offset + i + 1}.** \`${u.code}\` | ${userDisplay} | ${formatTime(left)}`;
+        }));
+        
+        listMsg += lines.join("\n");
     }
     return interaction.editReply(listMsg);
   }
@@ -360,7 +384,6 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// --- API ---
 app.get("/check", async (req, res) => {
   const { hwid } = req.query;
   if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
@@ -388,7 +411,9 @@ client.login(process.env.DISCORD_BOT_TOKEN)
     console.error("❌ LOGIN FAILED! Error Details:", err);
   });
 
-app.listen(PORT, () => console.log(`🚀 API Running on Port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 API Running on Port ${PORT}`);
+});
 
 // --- ANTI-CRASH ---
 process.on('unhandledRejection', (reason, p) => {
