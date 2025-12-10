@@ -1,15 +1,19 @@
 {
-  "name": "squidgamex-verify-backend",
+  "name": "squidgame-bot",
   "version": "1.0.0",
+  "description": "Verification Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
     "express": "^4.21.1",
     "cors": "^2.8.5",
-    "@supabase/supabase-js": "^2.45.0",
-    "dotenv": "^16.4.5"
+    "@supabase/supabase-js": "^2.46.1"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
