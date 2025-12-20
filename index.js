@@ -152,8 +152,8 @@ async function calculateUserDuration(member, rules) {
 // --- VERIFY ---
 async function handleVerification(message, code) {
   const { data: userData } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
-  if (!userData) return message.reply("❌ **Invalid Code!**");
-  if (userData.is_banned) return message.reply("🚫 **BANNED!** Admin has blocked you.");
+  if (!userData) return message.reply("❌ **Invalid Code, Sahise Dal le!**");
+  if (userData.is_banned) return message.reply("🚫 **BANNED!** Contact Admins to remove Ban.");
   
   const isFirstVerification = !userData.verified;
   let calculation;
@@ -214,7 +214,7 @@ client.on("messageCreate", async (message) => {
     collector.on('collect', async (m) => {
       const msg = m.content.toLowerCase();
       const token = m.content.trim();
-      if (["chup", "bakwas"].some(w => msg.includes(w))) { await m.reply("Sorry Sir! 🤐"); collector.stop(); return; }
+      if (["chup", "bakwas"].some(w => msg.includes(w))) { await m.reply("Sorry Sir,Mujhe Bich Me Nhi Bolna Chahiye Tha! 🤐"); collector.stop(); return; }
       if(token.length > 3) { await handleVerification(m, token); collector.stop(); }
     });
   }
