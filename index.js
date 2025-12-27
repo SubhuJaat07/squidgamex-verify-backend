@@ -1,99 +1,71 @@
 const express = require("express");
 const cors = require("cors");
 const { 
-  Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, 
-  ActivityType, Events, EmbedBuilder, PermissionFlagsBits 
+  Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, 
+  ActivityType, Events, EmbedBuilder, ActionRowBuilder, 
+  UserSelectMenuBuilder, ButtonBuilder, ButtonStyle, Collection, PermissionsBitField 
 } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
 
-// --- CONFIGURATION ---
+// --- ⚙️ CONFIGURATION ⚙️ ---
 const PORT = process.env.PORT || 10000;
 const SUPER_OWNER_ID = "1169492860278669312"; 
 const GUILD_ID = "1257403231127076915"; 
 const VERIFY_CHANNEL_ID = "1444769950421225542"; 
-const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; 
+const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; // 18 Hours
 
-// Database Tables
-const TABLE = "verifications";
-const RULES_TABLE = "role_rules";
-const ADMINS_TABLE = "bot_admins";
+// --- 🗄️ SUPABASE SETUP 🗄️ ---
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// --- EXPRESS SERVER (Start this FIRST to fix TCP Error) ---
+// --- 🌐 EXPRESS SERVER (Keep Alive & API) 🌐 ---
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.get("/", (req, res) => res.send("System Online 🟢"));
 
+// Verification Check API (Roblox Script calls this)
 app.get("/check", async (req, res) => {
   const { hwid } = req.query;
   if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
-  const { data: existing } = await supabase.from(TABLE).select("*").eq("hwid", hwid).maybeSingle();
+  
+  const { data: existing } = await supabase.from("verifications").select("*").eq("hwid", hwid).maybeSingle();
+  
   if (existing) {
     if (existing.is_banned) return res.json({ status: "BANNED", message: "Contact Admin" });
     if (existing.verified && new Date(existing.expires_at) > new Date()) return res.json({ status: "VALID" });
     return res.json({ status: "NEED_VERIFY", code: existing.code });
   }
+  
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  await supabase.from(TABLE).insert([{ hwid, code, verified: false, is_banned: false }]);
+  await supabase.from("verifications").insert([{ hwid, code, verified: false, is_banned: false }]);
   return res.json({ status: "NEED_VERIFY", code });
 });
 
-// 🚨 TCP FIX: Listen immediately!
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 HTTP Server Running FAST on Port ${PORT}`);
+    console.log(`🚀 Server Running on Port ${PORT}`);
 });
 
-// --- SUPABASE & DISCORD SETUP ---
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-
+// --- 🤖 DISCORD CLIENT 🤖 ---
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds, 
     GatewayIntentBits.GuildMessages, 
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers 
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildInvites
   ],
+  partials: [Partials.GuildMember, Partials.Channel]
 });
 
-// --- COMMANDS ---
-const commands = [
-  // User Commands
-  new SlashCommandBuilder().setName("verify").setDescription("🔐 Verify your game access instantly").addStringOption(o => o.setName("code").setDescription("Enter your 6-digit code").setRequired(true)),
-  new SlashCommandBuilder().setName("help").setDescription("❓ Get help regarding verification"),
-  new SlashCommandBuilder().setName("status").setDescription("📅 Check your own verification status"),
-  new SlashCommandBuilder().setName("boost").setDescription("🚀 Check your VIP role boosts"),
-  
-  // Admin Commands
-  new SlashCommandBuilder().setName("announce").setDescription("📢 Send an official announcement embed").addStringOption(o => o.setName("title").setDescription("Announcement Title").setRequired(true)).addStringOption(o => o.setName("message").setDescription("Main Content").setRequired(true)).addStringOption(o => o.setName("image").setDescription("Image URL (Optional)").setRequired(false)),
-  new SlashCommandBuilder().setName("purge").setDescription("🧹 Clear messages").addIntegerOption(o => o.setName("amount").setDescription("Number of messages (1-100)").setRequired(true)),
-  new SlashCommandBuilder().setName("activeusers").setDescription("📜 Admin: Beautiful list of online users").addIntegerOption(o => o.setName("page").setDescription("Page number")),
-  new SlashCommandBuilder().setName("userinfo").setDescription("🕵️‍♂️ Admin: Check if user has alt accounts").addUserOption(o => o.setName("user").setDescription("Select User").setRequired(true)),
-  new SlashCommandBuilder().setName("setexpiry").setDescription("⚡ Admin: Add/Set Time").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Time (e.g. 2d)").setRequired(true)),
-  new SlashCommandBuilder().setName("ban").setDescription("🚫 Admin: Ban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
-  new SlashCommandBuilder().setName("unban").setDescription("✅ Admin: Unban user").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
-  new SlashCommandBuilder().setName("lookup").setDescription("🔍 Admin: Deep Search (HWID/Code)").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
-  new SlashCommandBuilder().setName("setrule").setDescription("⚙️ Admin: Set Role Rule").addRoleOption(o => o.setName("role").setDescription("Role").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("e.g. 32h, +1h").setRequired(true)),
-  new SlashCommandBuilder().setName("removerule").setDescription("⚙️ Admin: Remove Role Rule").addRoleOption(o => o.setName("role").setDescription("Role").setRequired(true)),
-  new SlashCommandBuilder().setName("listrules").setDescription("📜 Admin: Show all rules"),
-  new SlashCommandBuilder().setName("resetuser").setDescription("⚠️ Admin: Delete user data").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)),
-].map(c => c.toJSON());
+// Global Caches
+const inviteCache = new Collection();
+const recentlySynced = new Set();
 
-const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
+// --- 🛠️ HELPER FUNCTIONS 🛠️ ---
 
-client.once(Events.ClientReady, async () => {
-  console.log(`✅ Bot Logged In as: ${client.user.tag}`);
-  client.user.setActivity('Squid Game X', { type: ActivityType.Watching });
-  try {
-    await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
-    console.log("🎉 SUCCESS: All Commands Registered!");
-  } catch (error) {
-    console.error("❌ Command Error:", error);
-  }
-});
-
-// --- HELPER FUNCTIONS ---
+// 1. Time Parser (1d, 2h, etc.)
 function parseDuration(durationStr) {
   if (!durationStr) return 0;
   if (durationStr.toLowerCase() === "lifetime") return "LIFETIME";
@@ -102,14 +74,14 @@ function parseDuration(durationStr) {
   if (!match) return 0;
   const val = parseInt(match[1]);
   const unit = match[2];
-  let ms = 0;
-  if (unit === 'm') ms = val * 60 * 1000;
-  if (unit === 'h') ms = val * 60 * 60 * 1000;
-  if (unit === 'd') ms = val * 24 * 60 * 60 * 1000;
-  if (unit === 'w') ms = val * 7 * 24 * 60 * 60 * 1000;
-  return ms;
+  if (unit === 'm') return val * 60 * 1000;
+  if (unit === 'h') return val * 60 * 60 * 1000;
+  if (unit === 'd') return val * 24 * 60 * 60 * 1000;
+  if (unit === 'w') return val * 7 * 24 * 60 * 60 * 1000;
+  return 0;
 }
 
+// 2. Time Formatter
 function formatTime(ms) {
   if (ms === "LIFETIME") return "Lifetime 👑";
   if (typeof ms !== 'number' || ms < 0) return 'Expired 💀';
@@ -121,17 +93,28 @@ function formatTime(ms) {
   if (days > 0) parts.push(`${days}d`);
   if (hours > 0) parts.push(`${hours}h`);
   if (minutes > 0) parts.push(`${minutes}m`);
-  if (parts.length === 0) return "Less than 1m";
-  return parts.join(' ');
+  return parts.length === 0 ? "Less than 1m" : parts.join(' ');
 }
 
+// 3. Admin Check
 async function isAdmin(userId) {
   if (userId === SUPER_OWNER_ID) return true;
-  const { data } = await supabase.from(ADMINS_TABLE).select("*").eq("discord_id", userId).maybeSingle();
+  const { data } = await supabase.from("bot_admins").select("*").eq("discord_id", userId).maybeSingle();
   return !!data;
 }
 
-// --- LOGIC ---
+// 4. Welcome Message Formatter
+function formatWelcomeMsg(text, member, inviterId, code) {
+    if (!text) return "";
+    return text
+        .replace(/{user}/g, `${member}`)
+        .replace(/{username}/g, member.user.username)
+        .replace(/{inviter}/g, (inviterId && inviterId !== 'left_user') ? `<@${inviterId}>` : "**Someone**")
+        .replace(/{code}/g, code || "N/A")
+        .replace(/{count}/g, member.guild.memberCount);
+}
+
+// 5. Verification Duration Calculator (Complex Logic)
 async function calculateUserDuration(member, rules) {
   let activeRules = rules.map(r => {
     const discordRole = member.roles.cache.get(r.role_id);
@@ -142,6 +125,7 @@ async function calculateUserDuration(member, rules) {
     return { duration: DEFAULT_VERIFY_MS, ruleText: "Default (18h)", isPunished: false };
   }
 
+  // Check Punishments first
   const punishments = activeRules.filter(r => r.roleName.toLowerCase().startsWith("punish"));
   if (punishments.length > 0) {
     let minMs = Infinity;
@@ -153,6 +137,7 @@ async function calculateUserDuration(member, rules) {
     return { duration: minMs, ruleText: `🚫 ${selectedRule.roleName}`, isPunished: true };
   }
 
+  // Base vs Bonus
   const bases = activeRules.filter(r => !r.duration.startsWith("+"));
   const bonuses = activeRules.filter(r => r.duration.startsWith("+"));
   let maxBase = DEFAULT_VERIFY_MS;
@@ -177,340 +162,372 @@ async function calculateUserDuration(member, rules) {
   return { duration: finalDuration, ruleText, isPunished: false };
 }
 
-// --- MAIN VERIFY HANDLER ---
-async function handleVerification(message, code) {
-  const { data: userData } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
-  
-  if (!userData) {
-      const errorEmbed = new EmbedBuilder()
-        .setColor(0xFF0000)
-        .setTitle("❌ Invalid Code")
-        .setDescription("Ye code database me nahi mila.\nRoblox game open karke **Check Verification** pe click karo.")
-        .setFooter({ text: "Squid Game X Security" });
-      return message.reply({ embeds: [errorEmbed] });
-  }
-
-  if (userData.is_banned) {
-      const banEmbed = new EmbedBuilder()
-        .setColor(0x000000)
-        .setTitle("🚫 YOU ARE BANNED")
-        .setDescription("Admin has permanently blocked this HWID.")
-        .setThumbnail("https://media.tenor.com/images/1c3137d522501256372134515152/tenor.gif");
-      return message.reply({ embeds: [banEmbed] });
-  }
-
-  // Alt Check
-  const { data: alts } = await supabase.from(TABLE).select("*").eq("discord_id", message.author.id);
-  if (alts && alts.length > 0) {
-      const existingAlt = alts.find(a => a.code !== code);
-      if (existingAlt) {
-          // Silent log or warning if needed
-      }
-  }
-  
-  let calculation;
-  try {
-    const member = await message.guild.members.fetch(message.author.id);
-    const { data: rules } = await supabase.from(RULES_TABLE).select("*");
-    calculation = await calculateUserDuration(member, rules || []);
-  } catch (e) {
-    calculation = { duration: DEFAULT_VERIFY_MS, ruleText: "Default (18h)", isPunished: false };
-  }
-
-  const { duration, ruleText, isPunished } = calculation;
-  let expiryTime;
-  if (duration === "LIFETIME") {
-    const d = new Date(); d.setFullYear(d.getFullYear() + 100);
-    expiryTime = d.toISOString();
-  } else {
-    expiryTime = new Date(new Date().getTime() + duration).toISOString();
-  }
-
-  await supabase.from(TABLE).update({ 
-    verified: true, 
-    expires_at: expiryTime,
-    discord_id: message.author.id 
-  }).eq("id", userData.id);
-
-  const embedColor = isPunished ? 0xFF4500 : 0x00FF7F; 
-  const successEmbed = new EmbedBuilder()
-    .setColor(embedColor)
-    .setTitle(isPunished ? "⚠️ Restricted Access Granted" : "✅ Verification Successful")
-    .setDescription(`**User:** <@${message.author.id}>\n**Status:** Verified & Online`)
-    .setThumbnail(message.author.displayAvatarURL())
-    .addFields(
-        { name: "🔑 Code", value: `\`${code}\``, inline: true },
-        { name: "⏱️ Validity", value: `\`${formatTime(duration)}\``, inline: true },
-        { name: "📜 Applied Role/Rule", value: ruleText, inline: false }
-    )
-    .setFooter({ text: "Squid Game X Verification", iconURL: client.user.displayAvatarURL() })
-    .setTimestamp();
-
-  return message.reply({ embeds: [successEmbed] });
+// 6. Invite Reward Checker
+async function checkRewards(guild, inviterId) {
+    if (inviterId === 'left_user') return;
+    const { data: stats } = await supabase.from("invite_stats").select("*").eq("guild_id", guild.id).eq("inviter_id", inviterId).maybeSingle();
+    if (!stats) return;
+    const { data: rewards } = await supabase.from("invite_rewards").select("*").eq("guild_id", guild.id);
+    if (!rewards) return;
+    const member = await guild.members.fetch(inviterId).catch(() => null);
+    if (!member) return;
+    for (const reward of rewards) {
+        if (stats.real_invites >= reward.invites_required) {
+            const { data: already } = await supabase.from("reward_logs").select("*").eq("guild_id", guild.id).eq("user_id", inviterId).eq("invites_required", reward.invites_required).maybeSingle();
+            if (already) continue;
+            const role = guild.roles.cache.get(reward.role_id);
+            if (role) await member.roles.add(role).catch(() => {});
+            await supabase.from("reward_logs").insert({ guild_id: guild.id, user_id: inviterId, invites_required: reward.invites_required });
+        }
+    }
 }
 
-// --- EVENTS ---
+// --- 📜 COMMANDS REGISTRATION 📜 ---
+const commands = [
+  // VERIFICATION
+  new SlashCommandBuilder().setName("verify").setDescription("🔐 Verify your game access instantly").addStringOption(o => o.setName("code").setDescription("Enter your 6-digit code").setRequired(true)),
+  new SlashCommandBuilder().setName("status").setDescription("📅 Check your own verification status"),
+  new SlashCommandBuilder().setName("boost").setDescription("🚀 Check your VIP role boosts"),
+  
+  // INVITE TRACKER
+  new SlashCommandBuilder().setName("invites").setDescription("📊 Check invites").addUserOption(o => o.setName("user").setDescription("Select user")),
+  new SlashCommandBuilder().setName("leaderboard").setDescription("🏆 Top 10 Inviters"),
+  new SlashCommandBuilder().setName("whoinvited").setDescription("🕵️ Check who invited a user").addUserOption(o => o.setName("user").setDescription("Select user").setRequired(true)),
+  new SlashCommandBuilder().setName("syncmissing").setDescription("🔄 Admin: Fix missing invite data"),
+  new SlashCommandBuilder().setName("config").setDescription("⚙️ Admin: Setup Welcome/Rewards")
+    .addSubcommand(s => s.setName("setchannel").setDescription("Set Welcome Channel").addChannelOption(o => o.setName("channel").setRequired(true).setDescription("Channel")))
+    .addSubcommand(s => s.setName("setmessage").setDescription("Set Welcome Msg").addStringOption(o => o.setName("title").setRequired(true).setDescription("Title")).addStringOption(o => o.setName("description").setRequired(true).setDescription("Desc")))
+    .addSubcommand(s => s.setName("addreward").setDescription("Add Role Reward").addIntegerOption(o => o.setName("invites").setRequired(true).setDescription("Count")).addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role"))),
 
+  // ADMIN
+  new SlashCommandBuilder().setName("announce").setDescription("📢 Send announcement").addStringOption(o => o.setName("title").setRequired(true).setDescription("Title")).addStringOption(o => o.setName("message").setRequired(true).setDescription("Msg")).addStringOption(o => o.setName("image").setDescription("Img URL")),
+  new SlashCommandBuilder().setName("purge").setDescription("🧹 Clear messages").addIntegerOption(o => o.setName("amount").setRequired(true).setDescription("Amount")),
+  new SlashCommandBuilder().setName("activeusers").setDescription("📜 Admin: List online users").addIntegerOption(o => o.setName("page").setDescription("Page")),
+  new SlashCommandBuilder().setName("userinfo").setDescription("🕵️‍♂️ Admin: Check alt accounts").addUserOption(o => o.setName("user").setRequired(true).setDescription("User")),
+  new SlashCommandBuilder().setName("setexpiry").setDescription("⚡ Admin: Add/Set Time").addStringOption(o => o.setName("target").setRequired(true).setDescription("Code/HWID")).addStringOption(o => o.setName("duration").setRequired(true).setDescription("Time")),
+  new SlashCommandBuilder().setName("ban").setDescription("🚫 Admin: Ban user").addStringOption(o => o.setName("target").setRequired(true).setDescription("Code/HWID")),
+  new SlashCommandBuilder().setName("unban").setDescription("✅ Admin: Unban user").addStringOption(o => o.setName("target").setRequired(true).setDescription("Code/HWID")),
+  new SlashCommandBuilder().setName("lookup").setDescription("🔍 Admin: Search DB").addStringOption(o => o.setName("target").setRequired(true).setDescription("Code/HWID")),
+  new SlashCommandBuilder().setName("setrule").setDescription("⚙️ Admin: Set Role Rule").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")).addStringOption(o => o.setName("duration").setRequired(true).setDescription("Duration")),
+  new SlashCommandBuilder().setName("removerule").setDescription("⚙️ Admin: Remove Role Rule").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")),
+  new SlashCommandBuilder().setName("listrules").setDescription("📜 Admin: Show rules"),
+  new SlashCommandBuilder().setName("resetuser").setDescription("⚠️ Admin: Delete user").addStringOption(o => o.setName("target").setRequired(true).setDescription("Code/HWID")),
+].map(c => c.toJSON());
+
+const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
+
+// --- 🚀 EVENTS: STARTUP & TRACKING 🚀 ---
+
+client.once(Events.ClientReady, async () => {
+  console.log(`✅ Bot Logged In as: ${client.user.tag}`);
+  client.user.setActivity('Squid Game X', { type: ActivityType.Watching });
+  
+  // Register Slash Commands
+  try {
+    await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
+    console.log("🎉 SUCCESS: All Commands Registered!");
+  } catch (error) { console.error("❌ Command Error:", error); }
+
+  // Cache Invites (Critical for Tracker)
+  for (const guild of client.guilds.cache.values()) {
+        try {
+            const invites = await guild.invites.fetch();
+            inviteCache.set(guild.id, new Collection(invites.map(i => [i.code, i.uses])));
+        } catch (e) { console.log(`❌ No Invite Perms: ${guild.name}`); }
+  }
+});
+
+// Update Cache on Invite Create/Delete
+client.on('inviteCreate', (invite) => { const invites = inviteCache.get(invite.guild.id); if (invites) invites.set(invite.code, invite.uses); });
+client.on('inviteDelete', (invite) => { const invites = inviteCache.get(invite.guild.id); if (invites) invites.delete(invite.code); });
+
+// --- 🚪 MEMBER JOIN (TRACKING + WELCOME) 🚪 ---
+client.on("guildMemberAdd", async member => {
+    // 1. TRACK INVITE
+    const newInvites = await member.guild.invites.fetch().catch(() => new Collection());
+    const oldInvites = inviteCache.get(member.guild.id);
+    const usedInvite = newInvites.find(i => i.uses > (oldInvites?.get(i.code) || 0));
+    inviteCache.set(member.guild.id, new Collection(newInvites.map(i => [i.code, i.uses])));
+
+    let inviterId = null; let code = "Unknown";
+    if (usedInvite) { inviterId = usedInvite.inviter?.id; code = usedInvite.code; }
+
+    if (inviterId) {
+        await supabase.from("joins").insert({ guild_id: member.guild.id, user_id: member.id, inviter_id: inviterId, code: code });
+        const { data: existing } = await supabase.from("invite_stats").select("*").eq("guild_id", member.guild.id).eq("inviter_id", inviterId).maybeSingle();
+        await supabase.from("invite_stats").upsert({
+            guild_id: member.guild.id, inviter_id: inviterId,
+            total_invites: (existing?.total_invites || 0) + 1, real_invites: (existing?.real_invites || 0) + 1,
+            fake_invites: existing?.fake_invites || 0, leaves: existing?.leaves || 0
+        });
+        await checkRewards(member.guild, inviterId);
+    }
+
+    // 2. WELCOME MESSAGE
+    const { data: config } = await supabase.from("guild_config").select("*").eq("guild_id", member.guild.id).maybeSingle();
+    if (config?.welcome_channel) {
+        const channel = member.guild.channels.cache.get(config.welcome_channel);
+        if (channel) {
+            const title = formatWelcomeMsg(config.welcome_title || "Welcome!", member, inviterId, code);
+            const desc = formatWelcomeMsg(config.welcome_desc || `Welcome {user} to the server!`, member, inviterId, code);
+            const embed = new EmbedBuilder().setColor('#0099ff').setTitle(title).setDescription(desc)
+                .setThumbnail(member.user.displayAvatarURL()).setFooter({ text: `Member #${member.guild.memberCount}` }).setTimestamp();
+            channel.send({ embeds: [embed] });
+        }
+    }
+});
+
+// --- 👋 MEMBER LEAVE ---
+client.on("guildMemberRemove", async member => {
+    const { data: join } = await supabase.from("joins").select("*").eq("guild_id", member.guild.id).eq("user_id", member.id).maybeSingle();
+    if (join && join.inviter_id && join.inviter_id !== 'left_user') {
+        const { data: stats } = await supabase.from("invite_stats").select("*").eq("guild_id", member.guild.id).eq("inviter_id", join.inviter_id).maybeSingle();
+        if (stats) {
+            await supabase.from("invite_stats").update({
+                real_invites: (stats.real_invites || 1) - 1, leaves: (stats.leaves || 0) + 1
+            }).eq("guild_id", member.guild.id).eq("inviter_id", join.inviter_id);
+        }
+    }
+});
+
+// --- 🔒 CHAT LOCK & AUTO MOD 🔒 ---
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-
-  // SYSTEM: Verification Channel Lock
+  
   if (message.channel.id === VERIFY_CHANNEL_ID) {
       const isCmd = message.content.toLowerCase().startsWith("verify");
       const isAdminUser = await isAdmin(message.author.id);
-
+      
+      // Delete non-verify messages (unless admin)
       if (!isCmd && !isAdminUser) {
           try { await message.delete(); } catch (e) {} 
           return;
       }
       
+      // Auto-reply for text verify
       if (isCmd) {
-        const args = message.content.trim().split(/\s+/);
-        if (args.length < 2) {
-             const helpEmbed = new EmbedBuilder().setColor(0xFF0000).setDescription("❌ **Use:** `verify 123456`");
-             const r = await message.reply({ embeds: [helpEmbed] });
-             setTimeout(() => r.delete().catch(()=>{}), 5000); 
-             return;
-        }
-        await handleVerification(message, args[1]);
+         const r = await message.reply({ content: "⚠️ **Please use Slash Command** `/verify <code>` for better security!", allowedMentions: { repliedUser: true } });
+         setTimeout(() => r.delete().catch(()=>{}), 8000);
       }
   }
-
+  
   if (message.content === "😎" && message.author.id === SUPER_OWNER_ID) {
       message.reply("System faad denge sir! 🔥");
   }
 });
 
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  const { commandName } = interaction;
-
-  if (commandName === "verify") {
-    const code = interaction.options.getString("code");
-    await interaction.deferReply();
-    const fakeMsg = {
-      author: interaction.user,
-      guild: interaction.guild,
-      reply: (opts) => interaction.editReply(opts),
-      channel: interaction.channel
-    };
-    await handleVerification(fakeMsg, code);
-    return;
-  }
-
-  if (commandName === "status") {
-      await interaction.deferReply({ ephemeral: true });
-      const { data: accounts } = await supabase.from(TABLE).select("*").eq("discord_id", interaction.user.id);
-      
-      if (!accounts || accounts.length === 0) return interaction.editReply("❌ You are not verified yet.");
-      
-      const statusEmbed = new EmbedBuilder()
-          .setColor(0x00FF00)
-          .setTitle("📅 Your Verification Status")
-          .setThumbnail(interaction.user.displayAvatarURL());
-          
-      accounts.forEach((acc, i) => {
-          const left = new Date(acc.expires_at).getTime() - Date.now();
-          statusEmbed.addFields({ 
-              name: `Device #${i+1}`, 
-              value: `Code: \`${acc.code}\`\nTime Left: **${formatTime(left)}**` 
-          });
-      });
-      return interaction.editReply({ embeds: [statusEmbed] });
-  }
-
-  if (commandName === "boost") {
-    await interaction.deferReply();
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    const { data: rules } = await supabase.from(RULES_TABLE).select("*");
-    const calc = await calculateUserDuration(member, rules || []);
+// --- 🎮 INTERACTION HANDLER 🎮 ---
+client.on("interactionCreate", async interaction => {
     
-    const boostEmbed = new EmbedBuilder()
-        .setColor(0xFFA500)
-        .setTitle("🚀 Your Boost Status")
-        .addFields(
-            { name: "Logic Applied", value: calc.ruleText },
-            { name: "Time You Will Get", value: formatTime(calc.duration) }
-        );
-    return interaction.editReply({ embeds: [boostEmbed] });
-  }
-
-  // --- ADMIN ONLY BELOW ---
-  if (!await isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Tum Admin nahi ho!", ephemeral: true });
-
-  if (commandName === "announce") {
-      const title = interaction.options.getString("title");
-      const msg = interaction.options.getString("message");
-      const img = interaction.options.getString("image");
-
-      const announceEmbed = new EmbedBuilder()
-          .setColor(0xFFD700)
-          .setTitle(`📢 ${title}`)
-          .setDescription(msg)
-          .setFooter({ text: `Announced by ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
-          .setTimestamp();
-      
-      if (img) announceEmbed.setImage(img);
-
-      await interaction.channel.send({ embeds: [announceEmbed] });
-      return interaction.reply({ content: "✅ Announcement Sent!", ephemeral: true });
-  }
-
-  if (commandName === "purge") {
-      const amount = interaction.options.getInteger("amount");
-      if (amount > 100 || amount < 1) return interaction.reply({ content: "1 se 100 ke beech delete kar sakte ho.", ephemeral: true });
-      
-      await interaction.channel.bulkDelete(amount, true).catch(err => {
-          return interaction.reply({ content: "❌ Error deleting messages (old messages cannot be deleted).", ephemeral: true });
-      });
-      return interaction.reply({ content: `🧹 Deleted ${amount} messages.`, ephemeral: true });
-  }
-
-  if (commandName === "activeusers") {
-    await interaction.deferReply(); 
-    const limit = 10; 
-    const page = interaction.options.getInteger("page") || 1;
-    const offset = (page - 1) * limit;
-    
-    const { data: activeUsers } = await supabase.from(TABLE)
-        .select("code, expires_at, discord_id")
-        .eq("verified", true)
-        .gt("expires_at", new Date().toISOString())
-        .order("expires_at", { ascending: true })
-        .range(offset, offset + limit - 1);
-
-    if (!activeUsers || !activeUsers.length) {
-        return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xFF0000).setTitle("❌ No Active Users")] });
-    }
-
-    const embed = new EmbedBuilder()
-        .setColor(0x0099FF)
-        .setTitle(`📜 Active Users (Page ${page})`)
-        .setFooter({ text: "Real-time Data" })
-        .setTimestamp();
-
-    const fields = [];
-    for (const [i, u] of activeUsers.entries()) {
-        const left = new Date(u.expires_at).getTime() - Date.now();
-        let userDisplay = "Unknown";
-        if (u.discord_id) {
-             try {
-                 const user = await client.users.fetch(u.discord_id);
-                 userDisplay = `${user.username}`;
-             } catch (e) { userDisplay = u.discord_id; }
+    // 1. SYNC MISSING (Button Handling)
+    if ((interaction.isUserSelectMenu() && interaction.customId === 'sync_select_inviter') || 
+        (interaction.isButton() && interaction.customId === 'sync_user_left')) {
+        const inviterId = interaction.isButton() ? 'left_user' : interaction.values[0];
+        const targetUserId = interaction.message.embeds[0].footer.text.replace("TargetID: ", "");
+        recentlySynced.add(targetUserId);
+        await interaction.deferUpdate();
+        
+        await supabase.from("joins").upsert({ guild_id: interaction.guild.id, user_id: targetUserId, inviter_id: inviterId, code: "manual" });
+        if (inviterId !== 'left_user') {
+            const { data: ex } = await supabase.from("invite_stats").select("*").eq("guild_id", interaction.guild.id).eq("inviter_id", inviterId).maybeSingle();
+            await supabase.from("invite_stats").upsert({ guild_id: interaction.guild.id, inviter_id: inviterId, total_invites: (ex?.total_invites || 0) + 1, real_invites: (ex?.real_invites || 0) + 1 });
         }
-        fields.push({ 
-            name: `#${offset + i + 1} ${userDisplay}`, 
-            value: `🔑 \`${u.code}\`\n⏳ ${formatTime(left)}`, 
-            inline: true 
-        });
+        await interaction.editReply({ content: "✅ Synced!", components: [] });
+        return;
     }
-    embed.addFields(fields);
-    return interaction.editReply({ embeds: [embed] });
-  }
 
-  if (commandName === "userinfo") {
-      await interaction.deferReply();
-      const targetUser = interaction.options.getUser("user");
-      const { data: accounts } = await supabase.from(TABLE).select("*").eq("discord_id", targetUser.id);
-      
-      const infoEmbed = new EmbedBuilder()
-          .setColor(0x9B59B6)
-          .setTitle(`🕵️‍♂️ User Lookup: ${targetUser.username}`)
-          .setThumbnail(targetUser.displayAvatarURL());
-      
-      if (!accounts || accounts.length === 0) {
-          infoEmbed.setDescription("❌ No verification data found for this user.");
-      } else {
-          infoEmbed.setDescription(`✅ Found **${accounts.length}** Linked Accounts`);
-          accounts.forEach((acc, i) => {
-              infoEmbed.addFields({
-                  name: `Account #${i+1}`,
-                  value: `Code: \`${acc.code}\`\nHWID: \`...${acc.hwid.slice(-6)}\`\nStatus: ${acc.verified ? "🟢 Active" : "🔴 Inactive"}`
-              });
-          });
-      }
-      return interaction.editReply({ embeds: [infoEmbed] });
-  }
+    if (!interaction.isChatInputCommand()) return;
+    const { commandName } = interaction;
 
-  if (commandName === "lookup") {
-      await interaction.deferReply();
-      const target = interaction.options.getString("target");
-      const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-      if (!data) return interaction.editReply("❌ Not Found");
-      
-      const lookupEmbed = new EmbedBuilder()
-        .setColor(0x00FFFF)
-        .setTitle("🔍 Database Lookup")
-        .addFields(
-            { name: "Code", value: `\`${data.code}\``, inline: true },
-            { name: "HWID", value: `\`${data.hwid}\``, inline: true },
-            { name: "Discord ID", value: data.discord_id ? `<@${data.discord_id}>` : "None", inline: true },
-            { name: "Status", value: data.is_banned ? "🚫 BANNED" : (data.verified ? "✅ Verified" : "❌ Unverified") },
-            { name: "Expiry", value: data.expires_at ? `<t:${Math.floor(new Date(data.expires_at).getTime()/1000)}:R>` : "Null" }
-        );
-      return interaction.editReply({ embeds: [lookupEmbed] });
-  }
+    // --- TRACKER COMMANDS ---
+    if (commandName === "invites") {
+        await interaction.deferReply();
+        const user = interaction.options.getUser("user") || interaction.user;
+        const { data } = await supabase.from("invite_stats").select("*").eq("guild_id", interaction.guild.id).eq("inviter_id", user.id).maybeSingle();
+        return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#2b2d31').setTitle(`📊 Invites: ${user.username}`).addFields({ name: '✅ Real', value: `${data?.real_invites || 0}`, inline: true }, { name: '📊 Total', value: `${data?.total_invites || 0}`, inline: true }, { name: '❌ Fake', value: `${data?.fake_invites || 0}`, inline: true })] });
+    }
 
-  // Handle setexpiry, ban, unban, setrule, removerule, listrules, resetuser
-  // Using basic replies for speed as requested
-  if (commandName === "setexpiry") {
-    await interaction.deferReply();
-    const duration = interaction.options.getString("duration");
-    const ms = parseDuration(duration);
-    if (!ms) return interaction.editReply("❌ Invalid");
-    const target = interaction.options.getString("target");
-    const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-    if (!data) return interaction.editReply("❌ Not Found");
-    let newDate = ms === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + ms).toISOString();
-    await supabase.from(TABLE).update({ verified: true, expires_at: newDate, is_banned: false }).eq("id", data.id);
-    return interaction.editReply(`✅ Updated ${target} for ${formatTime(ms)}`);
-  }
-  if (commandName === "ban") {
-      await interaction.deferReply();
-      const target = interaction.options.getString("target");
-      const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-      if (!data) return interaction.editReply("❌ Not Found");
-      await supabase.from(TABLE).update({ is_banned: true, verified: false }).eq("id", data.id);
-      return interaction.editReply(`🚫 Banned ${target}`);
-  }
-  if (commandName === "unban") {
-      await interaction.deferReply();
-      const target = interaction.options.getString("target");
-      const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-      if (!data) return interaction.editReply("❌ Not Found");
-      await supabase.from(TABLE).update({ is_banned: false }).eq("id", data.id);
-      return interaction.editReply(`✅ Unbanned ${target}`);
-  }
-  if (commandName === "setrule") {
-      await interaction.deferReply();
-      const role = interaction.options.getRole("role");
-      const duration = interaction.options.getString("duration");
-      const { data: existing } = await supabase.from(RULES_TABLE).select("*").eq("role_id", role.id).maybeSingle();
-      if (existing) await supabase.from(RULES_TABLE).update({ duration }).eq("id", existing.id);
-      else await supabase.from(RULES_TABLE).insert([{ role_id: role.id, duration }]);
-      return interaction.editReply(`✅ Rule Set: ${role.name} = ${duration}`);
-  }
-  if (commandName === "removerule") {
-      await interaction.deferReply();
-      const role = interaction.options.getRole("role");
-      await supabase.from(RULES_TABLE).delete().eq("role_id", role.id);
-      return interaction.editReply(`✅ Rule Removed: ${role.name}`);
-  }
-  if (commandName === "listrules") {
-      await interaction.deferReply();
-      const { data: rules } = await supabase.from(RULES_TABLE).select("*");
-      if (!rules || !rules.length) return interaction.editReply("ℹ️ No active rules.");
-      return interaction.editReply(`Active Rules: ${rules.length}`);
-  }
-  if (commandName === "resetuser") {
-      await interaction.deferReply();
-      const target = interaction.options.getString("target");
-      const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-      if (!data) return interaction.editReply("❌ Not Found");
-      await supabase.from(TABLE).delete().eq("id", data.id);
-      return interaction.editReply(`🗑️ Reset ${target}`);
-  }
+    if (commandName === "leaderboard") {
+        await interaction.deferReply();
+        const { data } = await supabase.from("invite_stats").select("*").eq("guild_id", interaction.guild.id).order("real_invites", { ascending: false }).limit(10);
+        const lb = data?.map((u, i) => `**#${i + 1}** <@${u.inviter_id}>: ${u.real_invites} Invites`).join("\n") || "No data.";
+        return interaction.editReply({ embeds: [new EmbedBuilder().setColor('#FFD700').setTitle('🏆 Top 10 Inviters').setDescription(lb)] });
+    }
+
+    if (commandName === "whoinvited") {
+        await interaction.deferReply();
+        const target = interaction.options.getUser("user");
+        const { data: joinData } = await supabase.from("joins").select("*").eq("guild_id", interaction.guild.id).eq("user_id", target.id).maybeSingle();
+        const inviterText = joinData ? (joinData.inviter_id === 'left_user' ? "Left Server" : `<@${joinData.inviter_id}>`) : "Unknown";
+        return interaction.editReply({ content: `**${target.username}** was invited by: ${inviterText}` });
+    }
+
+    // --- VERIFICATION COMMAND ---
+    if (commandName === "verify") {
+        await interaction.deferReply();
+        const code = interaction.options.getString("code");
+        const { data: userData } = await supabase.from("verifications").select("*").eq("code", code).limit(1).maybeSingle();
+        
+        if (!userData) return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xFF0000).setTitle("❌ Invalid Code").setDescription("Check Roblox Game for Code")] });
+        if (userData.is_banned) return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x000000).setTitle("🚫 BANNED")] });
+
+        // Calculate Logic
+        let calculation;
+        try {
+            const member = await interaction.guild.members.fetch(interaction.user.id);
+            const { data: rules } = await supabase.from("role_rules").select("*");
+            calculation = await calculateUserDuration(member, rules || []);
+        } catch (e) { calculation = { duration: DEFAULT_VERIFY_MS, ruleText: "Default", isPunished: false }; }
+
+        const { duration, ruleText, isPunished } = calculation;
+        let expiryTime;
+        if (duration === "LIFETIME") {
+            const d = new Date(); d.setFullYear(d.getFullYear() + 100); expiryTime = d.toISOString();
+        } else { expiryTime = new Date(Date.now() + duration).toISOString(); }
+
+        await supabase.from("verifications").update({ verified: true, expires_at: expiryTime, discord_id: interaction.user.id }).eq("id", userData.id);
+
+        const embed = new EmbedBuilder()
+            .setColor(isPunished ? 0xFF0000 : 0x00FF00)
+            .setTitle(isPunished ? "⚠️ Restricted Access" : "✅ Verification Successful")
+            .addFields(
+                { name: "Code", value: `\`${code}\``, inline: true },
+                { name: "Validity", value: formatTime(duration), inline: true },
+                { name: "Rule", value: ruleText, inline: false }
+            )
+            .setThumbnail(interaction.user.displayAvatarURL());
+        
+        return interaction.editReply({ embeds: [embed] });
+    }
+
+    if (commandName === "boost") {
+        await interaction.deferReply();
+        const member = await interaction.guild.members.fetch(interaction.user.id);
+        const { data: rules } = await supabase.from("role_rules").select("*");
+        const calc = await calculateUserDuration(member, rules || []);
+        return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xFFA500).setTitle("🚀 Boost Status").addFields({ name: "Logic", value: calc.ruleText }, { name: "Time", value: formatTime(calc.duration) })] });
+    }
+    
+    if (commandName === "status") {
+        await interaction.deferReply({ ephemeral: true });
+        const { data: accounts } = await supabase.from("verifications").select("*").eq("discord_id", interaction.user.id);
+        if (!accounts?.length) return interaction.editReply("❌ Not verified.");
+        const embed = new EmbedBuilder().setTitle("📅 Status").setColor(0x00FF00);
+        accounts.forEach((a,i) => {
+            const left = new Date(a.expires_at).getTime() - Date.now();
+            embed.addFields({ name: `Device ${i+1}`, value: `Code: \`${a.code}\`\nTime: ${formatTime(left)}` });
+        });
+        return interaction.editReply({ embeds: [embed] });
+    }
+
+    // --- ADMIN COMMANDS ---
+    if (!await isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Admins Only", ephemeral: true });
+
+    // ✅ ACTIVE USERS (CLICKABLE NAME FIX)
+    if (commandName === "activeusers") {
+        await interaction.deferReply(); 
+        const limit = 10; 
+        const page = interaction.options.getInteger("page") || 1;
+        const offset = (page - 1) * limit;
+        
+        const { data: activeUsers } = await supabase.from("verifications")
+            .select("code, expires_at, discord_id")
+            .eq("verified", true)
+            .gt("expires_at", new Date().toISOString())
+            .order("expires_at", { ascending: true })
+            .range(offset, offset + limit - 1);
+    
+        if (!activeUsers?.length) return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0xFF0000).setTitle("❌ No Active Users")] });
+    
+        const embed = new EmbedBuilder().setColor(0x0099FF).setTitle(`📜 Active Users (Page ${page})`).setTimestamp();
+        
+        const fields = [];
+        for (const [i, u] of activeUsers.entries()) {
+            const left = new Date(u.expires_at).getTime() - Date.now();
+            // 👇 THIS IS THE CLICKABLE NAME FIX (Markdown Link)
+            let userDisplay = u.discord_id ? `[Open Profile](https://discord.com/users/${u.discord_id})` : "`Unknown`";
+            
+            // Try fetching name if cached
+            if(u.discord_id) {
+                const user = client.users.cache.get(u.discord_id);
+                if(user) userDisplay = `[${user.username}](https://discord.com/users/${u.discord_id})`;
+            }
+
+            fields.push({ 
+                name: `#${offset + i + 1} (${u.code})`, 
+                value: `👤 ${userDisplay}\n⏳ ${formatTime(left)}`, 
+                inline: true 
+            });
+        }
+        embed.addFields(fields);
+        return interaction.editReply({ embeds: [embed] });
+    }
+
+    if (commandName === "config") {
+        await interaction.deferReply();
+        const sub = interaction.options.getSubcommand();
+        if (sub === "setchannel") {
+            await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, welcome_channel: interaction.options.getChannel("channel").id });
+            return interaction.editReply("✅ Channel Set.");
+        }
+        if (sub === "setmessage") {
+             const { data: ex } = await supabase.from("guild_config").select("welcome_channel").eq("guild_id", interaction.guild.id).maybeSingle();
+             await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, welcome_channel: ex?.welcome_channel, welcome_title: interaction.options.getString("title"), welcome_desc: interaction.options.getString("description") });
+             return interaction.editReply("✅ Message Set.");
+        }
+        if (sub === "addreward") {
+            await supabase.from("invite_rewards").insert({ guild_id: interaction.guild.id, invites_required: interaction.options.getInteger("invites"), role_id: interaction.options.getRole("role").id });
+            return interaction.editReply("✅ Reward Added.");
+        }
+    }
+
+    if (commandName === "announce") {
+        const embed = new EmbedBuilder().setColor('#FFD700').setTitle(interaction.options.getString("title")).setDescription(interaction.options.getString("message"));
+        if (interaction.options.getString("image")) embed.setImage(interaction.options.getString("image"));
+        await interaction.channel.send({ embeds: [embed] });
+        return interaction.reply({ content: "✅ Sent", ephemeral: true });
+    }
+
+    if (commandName === "purge") {
+        const amount = interaction.options.getInteger("amount");
+        if (amount > 100) return interaction.reply({ content: "Max 100", ephemeral: true });
+        await interaction.channel.bulkDelete(amount, true);
+        return interaction.reply({ content: `🧹 Deleted ${amount}`, ephemeral: true });
+    }
+
+    // Other Admin Commands (SetExpiry, Ban, Lookup etc.)
+    if (commandName === "setexpiry") {
+        await interaction.deferReply();
+        const ms = parseDuration(interaction.options.getString("duration"));
+        if (!ms) return interaction.editReply("❌ Invalid Duration");
+        const target = interaction.options.getString("target");
+        const { data } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
+        if (!data) return interaction.editReply("❌ Not Found");
+        const newDate = ms === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + ms).toISOString();
+        await supabase.from("verifications").update({ verified: true, expires_at: newDate }).eq("id", data.id);
+        return interaction.editReply(`✅ Updated ${target}`);
+    }
+
+    if (commandName === "lookup") {
+        await interaction.deferReply();
+        const target = interaction.options.getString("target");
+        const { data } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
+        if (!data) return interaction.editReply("❌ Not Found");
+        return interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x00FFFF).setTitle("🔍 Lookup").addFields(
+            { name: "Code", value: data.code, inline: true },
+            { name: "HWID", value: data.hwid, inline: true },
+            { name: "User", value: data.discord_id ? `<@${data.discord_id}>` : "None", inline: true },
+            { name: "Status", value: data.is_banned ? "🚫 BANNED" : "Active" }
+        )] });
+    }
+
+    // Ban/Unban/Userinfo/Rules (Standard logic)
+    if (commandName === "ban") {
+        await interaction.deferReply();
+        const target = interaction.options.getString("target");
+        await supabase.from("verifications").update({ is_banned: true, verified: false }).or(`code.eq.${target},hwid.eq.${target}`);
+        return interaction.editReply(`🚫 Banned ${target}`);
+    }
 });
 
 // --- FINAL LOGIN ---
