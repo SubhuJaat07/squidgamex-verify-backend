@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const { 
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, 
-  ActivityType, Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits 
+  ActivityType, Events, EmbedBuilder, PermissionFlagsBits 
 } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
@@ -11,7 +11,7 @@ require("dotenv").config();
 const PORT = process.env.PORT || 10000;
 const SUPER_OWNER_ID = "1169492860278669312"; 
 const GUILD_ID = "1257403231127076915"; 
-const VERIFY_CHANNEL_ID = "1444769950421225542"; // Yahan wo channel ID dalo jaha sirf verify allow karna hai
+const VERIFY_CHANNEL_ID = "1444769950421225542"; 
 const DEFAULT_VERIFY_MS = 18 * 60 * 60 * 1000; 
 
 // Database Tables
@@ -19,9 +19,31 @@ const TABLE = "verifications";
 const RULES_TABLE = "role_rules";
 const ADMINS_TABLE = "bot_admins";
 
+// --- EXPRESS SERVER (Start this FIRST to fix TCP Error) ---
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+app.get("/", (req, res) => res.send("System Online 🟢"));
+
+app.get("/check", async (req, res) => {
+  const { hwid } = req.query;
+  if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
+  const { data: existing } = await supabase.from(TABLE).select("*").eq("hwid", hwid).maybeSingle();
+  if (existing) {
+    if (existing.is_banned) return res.json({ status: "BANNED", message: "Contact Admin" });
+    if (existing.verified && new Date(existing.expires_at) > new Date()) return res.json({ status: "VALID" });
+    return res.json({ status: "NEED_VERIFY", code: existing.code });
+  }
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  await supabase.from(TABLE).insert([{ hwid, code, verified: false, is_banned: false }]);
+  return res.json({ status: "NEED_VERIFY", code });
+});
+
+// 🚨 TCP FIX: Listen immediately!
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 HTTP Server Running FAST on Port ${PORT}`);
+});
 
 // --- SUPABASE & DISCORD SETUP ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -37,9 +59,15 @@ const client = new Client({
 
 // --- COMMANDS ---
 const commands = [
+  // User Commands
   new SlashCommandBuilder().setName("verify").setDescription("🔐 Verify your game access instantly").addStringOption(o => o.setName("code").setDescription("Enter your 6-digit code").setRequired(true)),
   new SlashCommandBuilder().setName("help").setDescription("❓ Get help regarding verification"),
+  new SlashCommandBuilder().setName("status").setDescription("📅 Check your own verification status"),
   new SlashCommandBuilder().setName("boost").setDescription("🚀 Check your VIP role boosts"),
+  
+  // Admin Commands
+  new SlashCommandBuilder().setName("announce").setDescription("📢 Send an official announcement embed").addStringOption(o => o.setName("title").setDescription("Announcement Title").setRequired(true)).addStringOption(o => o.setName("message").setDescription("Main Content").setRequired(true)).addStringOption(o => o.setName("image").setDescription("Image URL (Optional)").setRequired(false)),
+  new SlashCommandBuilder().setName("purge").setDescription("🧹 Clear messages").addIntegerOption(o => o.setName("amount").setDescription("Number of messages (1-100)").setRequired(true)),
   new SlashCommandBuilder().setName("activeusers").setDescription("📜 Admin: Beautiful list of online users").addIntegerOption(o => o.setName("page").setDescription("Page number")),
   new SlashCommandBuilder().setName("userinfo").setDescription("🕵️‍♂️ Admin: Check if user has alt accounts").addUserOption(o => o.setName("user").setDescription("Select User").setRequired(true)),
   new SlashCommandBuilder().setName("setexpiry").setDescription("⚡ Admin: Add/Set Time").addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Time (e.g. 2d)").setRequired(true)),
@@ -56,7 +84,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN)
 
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot Logged In as: ${client.user.tag}`);
-  client.user.setActivity('Squid Game X | /verify', { type: ActivityType.Watching });
+  client.user.setActivity('Squid Game X', { type: ActivityType.Watching });
   try {
     await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: commands });
     console.log("🎉 SUCCESS: All Commands Registered!");
@@ -153,7 +181,6 @@ async function calculateUserDuration(member, rules) {
 async function handleVerification(message, code) {
   const { data: userData } = await supabase.from(TABLE).select("*").eq("code", code).limit(1).maybeSingle();
   
-  // 1. Invalid Code Embed
   if (!userData) {
       const errorEmbed = new EmbedBuilder()
         .setColor(0xFF0000)
@@ -163,7 +190,6 @@ async function handleVerification(message, code) {
       return message.reply({ embeds: [errorEmbed] });
   }
 
-  // 2. Banned User Embed
   if (userData.is_banned) {
       const banEmbed = new EmbedBuilder()
         .setColor(0x000000)
@@ -173,21 +199,15 @@ async function handleVerification(message, code) {
       return message.reply({ embeds: [banEmbed] });
   }
 
-  // 3. Alt Account Check (Agar Discord ID pehle se kisi aur Code se link hai)
+  // Alt Check
   const { data: alts } = await supabase.from(TABLE).select("*").eq("discord_id", message.author.id);
   if (alts && alts.length > 0) {
       const existingAlt = alts.find(a => a.code !== code);
       if (existingAlt) {
-          const altEmbed = new EmbedBuilder()
-            .setColor(0xFFA500)
-            .setTitle("⚠️ Multiple Accounts Detected")
-            .setDescription(`Tumhari ID pehle se code **${existingAlt.code}** ke sath verify hai.`)
-            .addFields({ name: "Note", value: "Ek Discord ID se sirf ek Device verify ho sakta hai." });
-          // Yahan hum block nahi kar rahe, bas bata rahe hain. Admin chahe to ban kare.
+          // Silent log or warning if needed
       }
   }
   
-  // Calculation
   let calculation;
   try {
     const member = await message.guild.members.fetch(message.author.id);
@@ -206,14 +226,12 @@ async function handleVerification(message, code) {
     expiryTime = new Date(new Date().getTime() + duration).toISOString();
   }
 
-  // Update DB
   await supabase.from(TABLE).update({ 
     verified: true, 
     expires_at: expiryTime,
     discord_id: message.author.id 
   }).eq("id", userData.id);
 
-  // 4. Success Embed (Premium Look)
   const embedColor = isPunished ? 0xFF4500 : 0x00FF7F; 
   const successEmbed = new EmbedBuilder()
     .setColor(embedColor)
@@ -225,8 +243,7 @@ async function handleVerification(message, code) {
         { name: "⏱️ Validity", value: `\`${formatTime(duration)}\``, inline: true },
         { name: "📜 Applied Role/Rule", value: ruleText, inline: false }
     )
-    .setImage("https://media.discordapp.net/attachments/111/222/verification_banner.png?width=800&height=200") // Yaha apna banner laga lena
-    .setFooter({ text: "Enjoy the game!", iconURL: client.user.displayAvatarURL() })
+    .setFooter({ text: "Squid Game X Verification", iconURL: client.user.displayAvatarURL() })
     .setTimestamp();
 
   return message.reply({ embeds: [successEmbed] });
@@ -234,39 +251,31 @@ async function handleVerification(message, code) {
 
 // --- EVENTS ---
 
-// 🛑 AUTO MOD & CHAT LOCK SYSTEM 🛑
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   // SYSTEM: Verification Channel Lock
-  // Agar msg us channel me hai jaha verify hota hai:
   if (message.channel.id === VERIFY_CHANNEL_ID) {
       const isCmd = message.content.toLowerCase().startsWith("verify");
       const isAdminUser = await isAdmin(message.author.id);
 
-      // Agar command nahi hai aur admin nahi hai -> DELETE
       if (!isCmd && !isAdminUser) {
-          try {
-              await message.delete();
-              // Optional: User ko DM bhej sakte ho ki "Sirf command use karo"
-          } catch (e) {} 
+          try { await message.delete(); } catch (e) {} 
           return;
       }
       
-      // Agar command hai, to process karo
       if (isCmd) {
         const args = message.content.trim().split(/\s+/);
         if (args.length < 2) {
              const helpEmbed = new EmbedBuilder().setColor(0xFF0000).setDescription("❌ **Use:** `verify 123456`");
              const r = await message.reply({ embeds: [helpEmbed] });
-             setTimeout(() => r.delete().catch(()=>{}), 5000); // 5 sec baad error msg bhi delete
+             setTimeout(() => r.delete().catch(()=>{}), 5000); 
              return;
         }
         await handleVerification(message, args[1]);
       }
   }
 
-  // Fun Command (Owner Only)
   if (message.content === "😎" && message.author.id === SUPER_OWNER_ID) {
       message.reply("System faad denge sir! 🔥");
   }
@@ -276,7 +285,6 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   const { commandName } = interaction;
 
-  // --- SLASH COMMANDS ---
   if (commandName === "verify") {
     const code = interaction.options.getString("code");
     await interaction.deferReply();
@@ -288,6 +296,27 @@ client.on("interactionCreate", async (interaction) => {
     };
     await handleVerification(fakeMsg, code);
     return;
+  }
+
+  if (commandName === "status") {
+      await interaction.deferReply({ ephemeral: true });
+      const { data: accounts } = await supabase.from(TABLE).select("*").eq("discord_id", interaction.user.id);
+      
+      if (!accounts || accounts.length === 0) return interaction.editReply("❌ You are not verified yet.");
+      
+      const statusEmbed = new EmbedBuilder()
+          .setColor(0x00FF00)
+          .setTitle("📅 Your Verification Status")
+          .setThumbnail(interaction.user.displayAvatarURL());
+          
+      accounts.forEach((acc, i) => {
+          const left = new Date(acc.expires_at).getTime() - Date.now();
+          statusEmbed.addFields({ 
+              name: `Device #${i+1}`, 
+              value: `Code: \`${acc.code}\`\nTime Left: **${formatTime(left)}**` 
+          });
+      });
+      return interaction.editReply({ embeds: [statusEmbed] });
   }
 
   if (commandName === "boost") {
@@ -306,13 +335,40 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.editReply({ embeds: [boostEmbed] });
   }
 
-  // ADMIN CHECK
+  // --- ADMIN ONLY BELOW ---
   if (!await isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Tum Admin nahi ho!", ephemeral: true });
 
-  // --- 👑 NEW ACTIVE USERS (PRO STYLE) ---
+  if (commandName === "announce") {
+      const title = interaction.options.getString("title");
+      const msg = interaction.options.getString("message");
+      const img = interaction.options.getString("image");
+
+      const announceEmbed = new EmbedBuilder()
+          .setColor(0xFFD700)
+          .setTitle(`📢 ${title}`)
+          .setDescription(msg)
+          .setFooter({ text: `Announced by ${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
+          .setTimestamp();
+      
+      if (img) announceEmbed.setImage(img);
+
+      await interaction.channel.send({ embeds: [announceEmbed] });
+      return interaction.reply({ content: "✅ Announcement Sent!", ephemeral: true });
+  }
+
+  if (commandName === "purge") {
+      const amount = interaction.options.getInteger("amount");
+      if (amount > 100 || amount < 1) return interaction.reply({ content: "1 se 100 ke beech delete kar sakte ho.", ephemeral: true });
+      
+      await interaction.channel.bulkDelete(amount, true).catch(err => {
+          return interaction.reply({ content: "❌ Error deleting messages (old messages cannot be deleted).", ephemeral: true });
+      });
+      return interaction.reply({ content: `🧹 Deleted ${amount} messages.`, ephemeral: true });
+  }
+
   if (commandName === "activeusers") {
     await interaction.deferReply(); 
-    const limit = 10; // Embed me 10 hi dikhayenge taaki clean rahe
+    const limit = 10; 
     const page = interaction.options.getInteger("page") || 1;
     const offset = (page - 1) * limit;
     
@@ -330,11 +386,9 @@ client.on("interactionCreate", async (interaction) => {
     const embed = new EmbedBuilder()
         .setColor(0x0099FF)
         .setTitle(`📜 Active Users (Page ${page})`)
-        .setDescription("List of currently verified players.")
-        .setFooter({ text: "Real-time Data from Supabase" })
+        .setFooter({ text: "Real-time Data" })
         .setTimestamp();
 
-    // Fetch names nicely
     const fields = [];
     for (const [i, u] of activeUsers.entries()) {
         const left = new Date(u.expires_at).getTime() - Date.now();
@@ -355,7 +409,6 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.editReply({ embeds: [embed] });
   }
 
-  // --- 🕵️‍♂️ ALT DETECTION COMMAND ---
   if (commandName === "userinfo") {
       await interaction.deferReply();
       const targetUser = interaction.options.getUser("user");
@@ -380,7 +433,6 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply({ embeds: [infoEmbed] });
   }
 
-  // --- OTHER ADMIN COMMANDS (SAME AS BEFORE BUT CLEANER) ---
   if (commandName === "lookup") {
       await interaction.deferReply();
       const target = interaction.options.getString("target");
@@ -399,12 +451,10 @@ client.on("interactionCreate", async (interaction) => {
         );
       return interaction.editReply({ embeds: [lookupEmbed] });
   }
-  
-  // Setexpiry, Ban, Unban, SetRule... (Baaki commands same logic bas embed me daal sakte ho agar chaho)
-  // For brevity, keeping simple replies for quick actions, but you can convert them too.
+
+  // Handle setexpiry, ban, unban, setrule, removerule, listrules, resetuser
+  // Using basic replies for speed as requested
   if (commandName === "setexpiry") {
-    // ... (Old logic, just updated variable names if needed)
-    // Same old logic works perfectly, just ensures functionality.
     await interaction.deferReply();
     const duration = interaction.options.getString("duration");
     const ms = parseDuration(duration);
@@ -432,24 +482,36 @@ client.on("interactionCreate", async (interaction) => {
       await supabase.from(TABLE).update({ is_banned: false }).eq("id", data.id);
       return interaction.editReply(`✅ Unbanned ${target}`);
   }
-});
-
-// --- API (NO CHANGE REQUIRED HERE) ---
-app.get("/check", async (req, res) => {
-  const { hwid } = req.query;
-  if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
-  const { data: existing } = await supabase.from(TABLE).select("*").eq("hwid", hwid).maybeSingle();
-  if (existing) {
-    if (existing.is_banned) return res.json({ status: "BANNED", message: "Contact Admin" });
-    if (existing.verified && new Date(existing.expires_at) > new Date()) return res.json({ status: "VALID" });
-    return res.json({ status: "NEED_VERIFY", code: existing.code });
+  if (commandName === "setrule") {
+      await interaction.deferReply();
+      const role = interaction.options.getRole("role");
+      const duration = interaction.options.getString("duration");
+      const { data: existing } = await supabase.from(RULES_TABLE).select("*").eq("role_id", role.id).maybeSingle();
+      if (existing) await supabase.from(RULES_TABLE).update({ duration }).eq("id", existing.id);
+      else await supabase.from(RULES_TABLE).insert([{ role_id: role.id, duration }]);
+      return interaction.editReply(`✅ Rule Set: ${role.name} = ${duration}`);
   }
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  await supabase.from(TABLE).insert([{ hwid, code, verified: false, is_banned: false }]);
-  return res.json({ status: "NEED_VERIFY", code });
+  if (commandName === "removerule") {
+      await interaction.deferReply();
+      const role = interaction.options.getRole("role");
+      await supabase.from(RULES_TABLE).delete().eq("role_id", role.id);
+      return interaction.editReply(`✅ Rule Removed: ${role.name}`);
+  }
+  if (commandName === "listrules") {
+      await interaction.deferReply();
+      const { data: rules } = await supabase.from(RULES_TABLE).select("*");
+      if (!rules || !rules.length) return interaction.editReply("ℹ️ No active rules.");
+      return interaction.editReply(`Active Rules: ${rules.length}`);
+  }
+  if (commandName === "resetuser") {
+      await interaction.deferReply();
+      const target = interaction.options.getString("target");
+      const { data } = await supabase.from(TABLE).select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
+      if (!data) return interaction.editReply("❌ Not Found");
+      await supabase.from(TABLE).delete().eq("id", data.id);
+      return interaction.editReply(`🗑️ Reset ${target}`);
+  }
 });
-
-app.get("/", (req, res) => res.send("System Online 🟢"));
 
 // --- FINAL LOGIN ---
 client.login(process.env.DISCORD_BOT_TOKEN);
