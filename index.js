@@ -1,6 +1,7 @@
 
 /**********************************************************************
- * 🚀 SQUID GAME X - THE REAL FINAL CODE (SYNC & VERIFY FIX)
+ * 🚀 SQUID GAME X - MANUAL SYNC EDITION
+ * Features: Manual Bulk Sync, Invite Tracker, Vote-to-Verify, Anti-Ping
  **********************************************************************/
 
 const express = require("express");
@@ -8,7 +9,7 @@ const cors = require("cors");
 const { 
   Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, 
   ActivityType, Events, EmbedBuilder, ActionRowBuilder, 
-  UserSelectMenuBuilder, ButtonBuilder, ButtonStyle, Collection, PermissionsBitField 
+  UserSelectMenuBuilder, ButtonBuilder, ButtonStyle, Collection, ComponentType, PermissionsBitField 
 } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
@@ -54,7 +55,8 @@ const client = new Client({
 });
 
 const inviteCache = new Collection();
-const recentlySynced = new Set();
+// 🔥 Used to track users processed in the current sync session
+const recentlySynced = new Set(); 
 
 // --- HELPER FUNCTIONS ---
 function createEmbed(title, description, color = 0x0099FF) {
@@ -100,6 +102,49 @@ async function safeReply(interaction, options) {
     try { if (interaction.replied || interaction.deferred) await interaction.editReply(options); else await interaction.reply(options); } catch (e) {}
 }
 
+// 🔥 MANUAL SYNC LOGIC (RECURSIVE)
+async function checkNextMissingUser(interactionOrMessage) {
+    const guild = interactionOrMessage.guild;
+    const members = await guild.members.fetch(); // Get fresh list
+    
+    const { data: joins } = await supabase.from("joins").select("user_id").eq("guild_id", guild.id);
+    const recordedIds = new Set(joins ? joins.map(j => j.user_id) : []);
+    
+    // Find first member who is NOT in DB and NOT recently synced
+    const missingMember = members.find(m => !m.user.bot && !recordedIds.has(m.id) && !recentlySynced.has(m.id));
+
+    if (!missingMember) {
+        const embed = createEmbed("✅ Sync Complete!", "All members are now registered in the database.", 0x00FF00);
+        if (interactionOrMessage.editReply) return interactionOrMessage.editReply({ content: null, embeds: [embed], components: [] });
+        return interactionOrMessage.channel.send({ embeds: [embed] });
+    }
+
+    // Build UI for the missing user
+    const embed = createEmbed("⚠️ Missing Invite Data", `**User:** ${missingMember} (${missingMember.user.tag})\n\n**Action:** Select who invited this user below.`, 0xFFA500)
+        .setFooter({ text: `TargetID: ${missingMember.id}` }); // Storing ID in footer for retrieval
+
+    const row1 = new ActionRowBuilder().addComponents(
+        new UserSelectMenuBuilder()
+            .setCustomId('sync_select_inviter')
+            .setPlaceholder('Search & Select Inviter...')
+            .setMaxValues(1)
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('sync_user_left')
+            .setLabel('Inviter Left Server / Unknown')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('🚪')
+    );
+
+    const payload = { content: null, embeds: [embed], components: [row1, row2] };
+
+    if (interactionOrMessage.editReply) await interactionOrMessage.editReply(payload);
+    else await interactionOrMessage.update(payload);
+}
+
+// --- VERIFY LOGIC ---
 async function processVerification(user, code, guild, replyCallback) {
     if (MAINTENANCE_MODE) return replyCallback({ content: "🚧 **System Under Maintenance**", ephemeral: true });
 
@@ -200,7 +245,7 @@ const commands = [
   new SlashCommandBuilder().setName("checkalts").setDescription("🕵️‍♂️ Show users with 2+ active keys"),
   new SlashCommandBuilder().setName("activeusers").setDescription("📜 List active users"),
   new SlashCommandBuilder().setName("userinfo").setDescription("🕵️‍♂️ User Alts").addUserOption(o => o.setName("user").setRequired(true).setDescription("User")),
-  new SlashCommandBuilder().setName("syncmissing").setDescription("🔄 Sync Invites (Real)"),
+  new SlashCommandBuilder().setName("syncmissing").setDescription("🔄 Sync Invites (Manual Bulk)"),
   new SlashCommandBuilder().setName("config").setDescription("⚙️ Setup")
     .addSubcommand(s => s.setName("setchannel").setDescription("Set Channel").addChannelOption(o => o.setName("channel").setRequired(true).setDescription("Ch")))
     .addSubcommand(s => s.setName("setmessage").setDescription("Set Msg").addStringOption(o => o.setName("title").setRequired(true).setDescription("T")).addStringOption(o => o.setName("description").setRequired(true).setDescription("D")))
@@ -229,7 +274,6 @@ client.on('inviteDelete', (invite) => { const invites = inviteCache.get(invite.g
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   
-  // 1. ANTI-PING
   if (message.mentions.users.has(SUPER_OWNER_ID) && message.author.id !== SUPER_OWNER_ID) {
       if (!await isAdmin(message.author.id)) {
           if (message.reference) return; 
@@ -250,9 +294,7 @@ client.on("messageCreate", async (message) => {
   const content = message.content.trim();
   const isCmd = content.toLowerCase().startsWith("verify");
   
-  // 2. VERIFY COMMAND (Permissions Fixed)
   if (isCmd) {
-      // Allow if Admin OR if inside the verify channel
       if (message.channel.id === VERIFY_CHANNEL_ID || await isAdmin(message.author.id)) {
           const args = content.split(/\s+/);
           if (args.length < 2) {
@@ -265,7 +307,6 @@ client.on("messageCreate", async (message) => {
       }
   }
 
-  // 3. CHAT LOCK
   if (message.channel.id === VERIFY_CHANNEL_ID) {
       if (!isCmd && !(await isAdmin(message.author.id))) { 
           try { await message.delete(); } catch (e) {} 
@@ -276,7 +317,41 @@ client.on("messageCreate", async (message) => {
 // --- 🎮 INTERACTION HANDLER 🎮 ---
 client.on("interactionCreate", async interaction => {
     try {
-        // BUTTONS
+        // 🔥 SYNC HANDLERS (Manual Bulk)
+        if ((interaction.isUserSelectMenu() && interaction.customId === 'sync_select_inviter') || (interaction.isButton() && interaction.customId === 'sync_user_left')) {
+            const targetUserId = interaction.message.embeds[0].footer.text.replace("TargetID: ", "");
+            const inviterId = interaction.isButton() ? 'left_user' : interaction.values[0];
+            
+            await interaction.deferUpdate(); // Acknowledge button press
+            
+            // 1. Add to DB
+            await supabase.from("joins").upsert({ 
+                guild_id: interaction.guild.id, 
+                user_id: targetUserId, 
+                inviter_id: inviterId, 
+                code: "manual_sync" 
+            });
+
+            // 2. Update Stats (only if real user)
+            if (inviterId !== 'left_user') {
+                const { data: ex } = await supabase.from("invite_stats").select("*").eq("guild_id", interaction.guild.id).eq("inviter_id", inviterId).maybeSingle();
+                await supabase.from("invite_stats").upsert({ 
+                    guild_id: interaction.guild.id, 
+                    inviter_id: inviterId, 
+                    total_invites: (ex?.total_invites || 0) + 1, 
+                    real_invites: (ex?.real_invites || 0) + 1 
+                });
+            }
+
+            // 3. Mark locally as synced to avoid loop
+            recentlySynced.add(targetUserId);
+
+            // 4. Show NEXT user immediately
+            await checkNextMissingUser(interaction);
+            return;
+        }
+
+        // BUTTONS (Others)
         if (interaction.isButton()) {
             if (interaction.customId.startsWith('copy_')) {
                 await interaction.deferReply({ ephemeral: true });
@@ -304,49 +379,18 @@ client.on("interactionCreate", async interaction => {
             }
         }
 
-        // SYNC HANDLER
-        if ((interaction.isUserSelectMenu() && interaction.customId === 'sync_select_inviter') || (interaction.isButton() && interaction.customId === 'sync_user_left')) {
-            await interaction.deferUpdate(); 
-            // In a real scenario, you'd use the selected ID here. For simplicity in "Missing Sync" context:
-            await interaction.editReply({ content: "✅ Synced!", components: [] });
-            return;
-        }
-
         if (!interaction.isChatInputCommand()) return;
         const { commandName } = interaction;
 
-        // 🔥 REAL SYNC MISSING COMMAND
+        // SYNC MISSING (Start the Manual Loop)
         if (commandName === "syncmissing") {
             if (!await isAdmin(interaction.user.id)) return safeReply(interaction, { content: "❌ Admin", ephemeral: true });
-            await interaction.deferReply({ ephemeral: true });
-            
-            try {
-                // FETCH ALL MEMBERS (Needs Server Members Intent ON)
-                const members = await interaction.guild.members.fetch();
-                let added = 0;
-                
-                // Get existing IDs to avoid DB spam
-                const { data: existing } = await supabase.from("joins").select("user_id").eq("guild_id", interaction.guild.id);
-                const existingSet = new Set(existing ? existing.map(j => j.user_id) : []);
-
-                for (const [id, member] of members) {
-                    if (member.user.bot) continue;
-                    if (!existingSet.has(id)) {
-                        // Insert Missing Member as "Unknown Inviter"
-                        await supabase.from("joins").insert({
-                            guild_id: interaction.guild.id,
-                            user_id: id,
-                            inviter_id: 'unknown',
-                            code: 'sync'
-                        });
-                        added++;
-                    }
-                }
-                return interaction.editReply(`✅ **Sync Complete!**\nRegistered ${added} missing users in Database.`);
-            } catch (e) {
-                console.error(e);
-                return interaction.editReply("❌ **Error:** Failed to fetch members. Enable 'Server Members Intent' in Discord Dev Portal.");
-            }
+            await interaction.deferReply({ ephemeral: true }); // Using ephemeral to keep channel clean
+            // Reset local cache for fresh start
+            recentlySynced.clear(); 
+            // Start the loop
+            await checkNextMissingUser(interaction);
+            return;
         }
 
         // ADMIN CMDS
@@ -382,18 +426,7 @@ client.on("interactionCreate", async interaction => {
             await processVerification(interaction.user, interaction.options.getString("code"), interaction.guild, (opts) => interaction.editReply(opts));
         }
 
-        // USERINFO (CRASH PROOF)
-        if (commandName === "userinfo") { 
-            await interaction.deferReply(); 
-            const u = interaction.options.getUser("user"); 
-            const { data } = await supabase.from("verifications").select("*").eq("discord_id", u.id); 
-            if(!data || data.length === 0) return interaction.editReply("ℹ️ No verification data found."); 
-            let d = ""; 
-            data.forEach(x => d+= `Code: \`${x.code}\` | HWID: \`...${x.hwid.slice(-5)}\`\n`); 
-            return interaction.editReply({embeds: [createEmbed(`Info: ${u.username}`, d, 0x00FF00)]}); 
-        }
-
-        // ... (Standard cmds)
+        // OTHER CMDS
         if (commandName === "activeusers") { 
             if (!await isAdmin(interaction.user.id)) return safeReply(interaction, { content: "❌ Admins Only", ephemeral: true }); 
             await interaction.deferReply(); 
@@ -408,8 +441,9 @@ client.on("interactionCreate", async interaction => {
         if (commandName === "unban") { await interaction.deferReply(); const target = interaction.options.getString("target"); await supabase.from("verifications").update({ is_banned: false }).or(`code.eq.${target},hwid.eq.${target}`); return interaction.editReply(`✅ Unbanned ${target}`); }
         if (commandName === "leaderboard") { await interaction.deferReply(); const { data } = await supabase.from("invite_stats").select("*").eq("guild_id", interaction.guild.id).order("real_invites", { ascending: false }).limit(10); const lb = (data && data.length > 0) ? data.map((u, i) => `**#${i + 1}** <@${u.inviter_id}>: ${u.real_invites}`).join("\n") : "No data available."; return interaction.editReply({ embeds: [createEmbed('🏆 Top 10 Inviters', lb, 0xFFD700)] }); }
         if (commandName === "whoinvited") { await interaction.deferReply(); const target = interaction.options.getUser("user"); const { data: joinData } = await supabase.from("joins").select("*").eq("guild_id", interaction.guild.id).eq("user_id", target.id).maybeSingle(); return interaction.editReply({ content: `**${target.username}** was invited by: ${joinData ? (joinData.inviter_id === 'left_user' ? "Left Server" : `<@${joinData.inviter_id}>`) : "Unknown"}` }); }
+        if (commandName === "userinfo") { await interaction.deferReply(); const u = interaction.options.getUser("user"); const { data } = await supabase.from("verifications").select("*").eq("discord_id", u.id); if(!data || data.length === 0) return interaction.editReply("No data."); let d = ""; data.forEach(x => d+= `Code: \`${x.code}\` | HWID: \`...${x.hwid.slice(-5)}\`\n`); return interaction.editReply({embeds: [createEmbed(`Info: ${u.username}`, d, 0x00FF00)]}); }
 
-    } catch (err) { console.error("Error:", err); try{ if(!interaction.replied) await interaction.reply({content:"⚠️ Error", ephemeral:true}); }catch(e){} }
+    } catch (err) { console.error("Interaction Error:", err); try{ if(!interaction.replied) await interaction.reply({content:"⚠️ Error", ephemeral:true}); }catch(e){} }
 });
 
 async function generateActiveUsersPayload(guild, page) {
