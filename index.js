@@ -1,7 +1,7 @@
 /**********************************************************************
- * 🚀 SQUID GAME X - FINAL STABLE GOD MODE
+ * 🚀 SQUID GAME X - FINAL GOD MODE (STABLE)
  * Developed By: Subhu Jaat
- * Features: Anti-Ping, Invite Tracker, Vote-to-Verify, Admin Tools
+ * Fixes: Real Timeouts, Reply Immunity, No-Delete Policy
  **********************************************************************/
 
 const express = require("express");
@@ -71,7 +71,7 @@ function createEmbed(title, description, color = 0x0099FF) {
         .setTitle(title)
         .setDescription(description)
         .setColor(color)
-        .setFooter({ text: "Developed By Subhu Jaat • Squid Game X", iconURL: "https://i.imgur.com/AfFp7pu.png" }) // Apni image laga lena
+        .setFooter({ text: "Developed By Subhu Jaat • Squid Game X", iconURL: "https://i.imgur.com/AfFp7pu.png" }) // Apni PFP URL laga lena
         .setTimestamp();
 }
 
@@ -249,19 +249,25 @@ client.once(Events.ClientReady, async () => {
 client.on('inviteCreate', (invite) => { const invites = inviteCache.get(invite.guild.id); if (invites) invites.set(invite.code, invite.uses); });
 client.on('inviteDelete', (invite) => { const invites = inviteCache.get(invite.guild.id); if (invites) invites.delete(invite.code); });
 
-// 🔥 TEXT COMMAND HANDLER & ANTI-PING
+// 🔥 TEXT COMMAND & ANTI-PING HANDLER (FIXED)
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   
-  // 1. ANTI-PING SYSTEM
+  // 1. ANTI-PING SYSTEM (Fix: Ignore Replies & Don't Delete)
   if (message.mentions.users.has(SUPER_OWNER_ID) && message.author.id !== SUPER_OWNER_ID) {
       if (!await isAdmin(message.author.id)) {
-          try {
-              await message.delete();
-              const warnMsg = await message.channel.send(`<@${message.author.id}> ⚠️ **Pinging Owner is NOT Allowed!** (5m Timeout)`);
-              await message.member.timeout(5 * 60 * 1000, "Pinging Owner");
-              setTimeout(() => warnMsg.delete().catch(()=>{}), 5000);
-          } catch (e) { console.log("AntiPing Error:", e.message); }
+          // EXCEPTION: If it is a reply (reference exists), DO NOT PUNISH
+          if (message.reference) return; 
+
+          // EXCEPTION: Don't delete message (User Request), but Timeout
+          if (message.member && message.member.moderatable) {
+              await message.member.timeout(5 * 60 * 1000, "Pinging Owner"); // 5 Mins Timeout
+              const warn = await message.reply("⚠️ **Do not ping the Owner!** You have been timed out for 5 mins.");
+              setTimeout(() => warn.delete().catch(()=>{}), 5000);
+          } else {
+              const warn = await message.reply("⚠️ **Do not ping the Owner!** (Bot role too low to timeout)");
+              setTimeout(() => warn.delete().catch(()=>{}), 5000);
+          }
           return;
       }
   }
@@ -391,7 +397,7 @@ client.on("interactionCreate", async interaction => {
             let userPfp = client.user.displayAvatarURL(); let userName = "Unknown";
             if (data.discord_id) { try { const user = await client.users.fetch(data.discord_id); userPfp = user.displayAvatarURL(); userName = user.username; } catch (e) {} }
             const expiry = data.expires_at ? `<t:${Math.floor(new Date(data.expires_at).getTime() / 1000)}:R>` : "No Session";
-            const embed = createEmbed(`🔍 Lookup: ${userName}`, "", 0x00FFFF).setThumbnail(userPfp).addFields({ name: "🔑 Code", value: `\`${data.code}\``, inline: true }, { name: "👤 User", value: data.discord_id ? `<@${data.discord_id}>` : "`None`", inline: true }, { name: "🖥️ HWID", value: `\`${data.hwid}\``, inline: false }, { name: "📡 Status", value: data.is_banned ? "🚫 BANNED" : "✅ Active", inline: true }, { name: "⏳ Expiry", value: expiry, inline: true });
+            const embed = createEmbed(`🔍 Lookup: ${userName}`, "", 0x00FFFF).setThumbnail(userPfp).addFields({ name: "🔑 Code", value: `\`${data.code}\``, inline: true }, { name: "👤 User", value: data.discord_id ? `<@${data.discord_id}>` : "`None`", inline: true }, { name: "🖥️ HWID", value: `\`${data.hwid}\``, inline: false }, { name: "📡 Status", value: data.is_banned ? "🚫 **BANNED**" : "✅ **Active**", inline: true }, { name: "⏳ Expiry", value: expiry, inline: true });
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`copy_${data.code}`).setLabel('📋 Copy Data').setStyle(ButtonStyle.Secondary));
             return interaction.editReply({ embeds: [embed], components: [row] }); 
         }
@@ -415,11 +421,10 @@ client.on("interactionCreate", async interaction => {
         if (commandName === "setexpiry") { await interaction.deferReply(); const ms = parseDuration(interaction.options.getString("duration")); const target = interaction.options.getString("target"); const { data } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle(); if (!data) return interaction.editReply("❌ Not Found"); const newDate = ms === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + ms).toISOString(); await supabase.from("verifications").update({ verified: true, expires_at: newDate }).eq("id", data.id); return interaction.editReply(`✅ Updated ${target}`); }
         if (commandName === "ban") { await interaction.deferReply(); const target = interaction.options.getString("target"); await supabase.from("verifications").update({ is_banned: true, verified: false }).or(`code.eq.${target},hwid.eq.${target}`); return interaction.editReply(`🚫 Banned ${target}`); }
         if (commandName === "unban") { await interaction.deferReply(); const target = interaction.options.getString("target"); await supabase.from("verifications").update({ is_banned: false }).or(`code.eq.${target},hwid.eq.${target}`); return interaction.editReply(`✅ Unbanned ${target}`); }
-        // Invite Tracker logic for leaderboard/whoinvited remains same...
         if (commandName === "leaderboard") { await interaction.deferReply(); const { data } = await supabase.from("invite_stats").select("*").eq("guild_id", interaction.guild.id).order("real_invites", { ascending: false }).limit(10); const lb = data?.map((u, i) => `**#${i + 1}** <@${u.inviter_id}>: ${u.real_invites}`).join("\n") || "No data."; return interaction.editReply({ embeds: [createEmbed('🏆 Top 10 Inviters', lb, 0xFFD700)] }); }
         if (commandName === "whoinvited") { await interaction.deferReply(); const target = interaction.options.getUser("user"); const { data: joinData } = await supabase.from("joins").select("*").eq("guild_id", interaction.guild.id).eq("user_id", target.id).maybeSingle(); return interaction.editReply({ content: `**${target.username}** was invited by: ${joinData ? (joinData.inviter_id === 'left_user' ? "Left Server" : `<@${joinData.inviter_id}>`) : "Unknown"}` }); }
 
-    } catch (err) { console.error("Error:", err); try{ if(!interaction.replied) await interaction.reply({content:"⚠️ Error", ephemeral:true}); }catch(e){} }
+    } catch (err) { console.error("Interaction Error:", err); try{ if(!interaction.replied) await interaction.reply({content:"⚠️ Error", ephemeral:true}); }catch(e){} }
 });
 
 async function generateActiveUsersPayload(guild, page) {
@@ -445,11 +450,9 @@ async function generateActiveUsersPayload(guild, page) {
     return { embeds: [embed], components: [row] };
 }
 
-// Global Handlers
-client.on("guildMemberAdd", async member => { /* Same Tracker Logic */ });
-client.on("guildMemberRemove", async member => { /* Same Tracker Logic */ });
-client.on('inviteCreate', (invite) => { const invites = inviteCache.get(invite.guild.id); if (invites) invites.set(invite.code, invite.uses); });
-client.on('inviteDelete', (invite) => { const invites = inviteCache.get(invite.guild.id); if (invites) invites.delete(invite.code); });
+// Tracker Global Handlers
+client.on("guildMemberAdd", async member => { /* Logic above */ });
+client.on("guildMemberRemove", async member => { /* Logic above */ });
 
 client.login(process.env.DISCORD_BOT_TOKEN);
 
