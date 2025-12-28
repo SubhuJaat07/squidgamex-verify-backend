@@ -1,3 +1,4 @@
+
 const express = require("express");
 const cors = require("cors");
 const { Client, GatewayIntentBits, Partials, Collection, Routes, REST, SlashCommandBuilder } = require("discord.js");
