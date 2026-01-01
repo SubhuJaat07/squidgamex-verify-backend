@@ -44,6 +44,7 @@ function parseDuration(str) {
 
 function formatTime(ms) {
     if (ms === "LIFETIME") return "Lifetime ♾️";
+    if (typeof ms !== 'number' || ms < 0) return 'Expired 💀';
     const totalSeconds = Math.floor(ms / 1000);
     const days = Math.floor(totalSeconds / 86400);
     const hours = Math.floor((totalSeconds % 86400) / 3600);
