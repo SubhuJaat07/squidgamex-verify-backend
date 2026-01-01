@@ -2,24 +2,24 @@ const { EmbedBuilder } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
 
-// --- SETTINGS ---
+// --- ⚙️ SETTINGS ---
 const SETTINGS = {
     PORT: process.env.PORT || 10000,
-    SUPER_OWNER_ID: "1169492860278669312",
-    GUILD_ID: "1257403231127076915",
-    VERIFY_CHANNEL_ID: "1444769950421225542",
-    DEFAULT_VERIFY_MS: 18 * 60 * 60 * 1000,
-    PUNISH_NO_VOTE_MS: 1 * 60 * 60 * 1000,
+    SUPER_OWNER_ID: "1169492860278669312", 
+    GUILD_ID: "1257403231127076915", 
+    VERIFY_CHANNEL_ID: "1444769950421225542", 
+    DEFAULT_VERIFY_MS: 18 * 60 * 60 * 1000, 
+    DEFAULT_PUNISH_MS: 5 * 60 * 1000, // 5 Mins Default
+    ROBLOX_API_USER: "https://users.roblox.com/v1/usernames/users",
     MAINTENANCE: false,
     POLL_LOCK: false
 };
 
-// --- DATABASE ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 // --- HELPERS ---
 function createEmbed(title, description, color = 0x0099FF) {
-    const safeDesc = (description && description.length > 0) ? description : "No data available.";
+    const safeDesc = (description && description.length > 0) ? description : "Processing...";
     return new EmbedBuilder()
         .setTitle(title)
         .setDescription(safeDesc)
@@ -44,7 +44,6 @@ function parseDuration(str) {
 
 function formatTime(ms) {
     if (ms === "LIFETIME") return "Lifetime ♾️";
-    if (typeof ms !== 'number' || ms < 0) return 'Expired 💀';
     const totalSeconds = Math.floor(ms / 1000);
     const days = Math.floor(totalSeconds / 86400);
     const hours = Math.floor((totalSeconds % 86400) / 3600);
