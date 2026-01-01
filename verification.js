@@ -4,6 +4,7 @@ const { SETTINGS, supabase, createEmbed, formatTime } = require("./config");
 async function handleGetRobloxId(interaction) {
     const username = interaction.options.getString("username");
     try {
+        // Fetch from Roblox API
         const response = await fetch(SETTINGS.ROBLOX_API_USER, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -13,7 +14,7 @@ async function handleGetRobloxId(interaction) {
         
         if (json.data && json.data.length > 0) {
             const rUser = json.data[0];
-            return interaction.reply({ embeds: [createEmbed("✅ Roblox ID Found", `**Username:** ${rUser.name}\n**ID:** \`${rUser.id}\`\n\nCopy this ID and use \`/linkroblox ${rUser.id}\``, 0x00FF00)], ephemeral: true });
+            return interaction.reply({ embeds: [createEmbed("✅ Roblox ID Found", `**Username:** ${rUser.name}\n**ID:** \`${rUser.id}\`\n\n👇 **Copy this command:**\n\`/linkroblox roblox_id:${rUser.id}\``, 0x00FF00)], ephemeral: true });
         } else {
             return interaction.reply({ content: "❌ User not found on Roblox.", ephemeral: true });
         }
@@ -23,16 +24,15 @@ async function handleGetRobloxId(interaction) {
 // 🔥 2. LINK ROBLOX ID (New Command)
 async function handleLinkRoblox(interaction) {
     const rId = interaction.options.getString("roblox_id");
-    // Validate if it's a number
-    if (!/^\d+$/.test(rId)) return interaction.reply({ content: "❌ Invalid ID. It must be numbers only.", ephemeral: true });
+    // Validate number
+    if (!/^\d+$/.test(rId)) return interaction.reply({ content: "❌ Invalid ID. Numbers only.", ephemeral: true });
 
     await supabase.from("roblox_links").upsert({
         discord_id: interaction.user.id,
-        roblox_id: rId,
-        roblox_username: "LinkedViaBot"
+        roblox_id: rId
     });
 
-    return interaction.reply({ embeds: [createEmbed("✅ Linked Successfully", `Your Discord is now linked to Roblox ID: \`${rId}\`.\nYou can now use \`/verify\` commands.`, 0x00FF00)], ephemeral: true });
+    return interaction.reply({ embeds: [createEmbed("✅ Linked Successfully", `Your Discord is now linked to Roblox ID: \`${rId}\`.\nNow you can use \`/verify\` commands.`, 0x00FF00)], ephemeral: true });
 }
 
 // 🔥 3. PROCESS VERIFICATION (Updated Check)
@@ -43,22 +43,18 @@ async function processVerification(user, code, guild, replyCallback) {
     const { data: link } = await supabase.from("roblox_links").select("*").eq("discord_id", user.id).maybeSingle();
     if (!link) {
         return replyCallback({ 
-            embeds: [createEmbed("⚠️ Action Required", "You must link your Roblox ID first!\n\n1️⃣ Use `/getid <your_roblox_name>` to find your ID.\n2️⃣ Use `/linkroblox <id>` to link it.\n3️⃣ Then use `/verify <code>` again.", 0xFFA500)] 
+            embeds: [createEmbed("⚠️ Action Required", "You must link your Roblox ID first!\n\n1️⃣ Use `/getid <username>` to find your ID.\n2️⃣ Use `/linkroblox <id>` to link it.\n3️⃣ Then use `/verify <code>`.", 0xFFA500)] 
         });
     }
 
     // B. Poll Check
     let isPollPunished = false;
-    let punishmentMsg = "Default Access";
     
     if (SETTINGS.POLL_LOCK) {
         const { data: activePoll } = await supabase.from("polls").select("id").eq("is_active", true).order('created_at', { ascending: false }).limit(1).maybeSingle();
         if (activePoll) {
             const { data: vote } = await supabase.from("poll_votes").select("*").eq("poll_id", activePoll.id).eq("user_id", user.id).maybeSingle();
-            if (!vote) {
-                isPollPunished = true;
-                punishmentMsg = "⚠️ **Penalty:** You didn't vote on the Poll! (Vote to get full time)";
-            }
+            if (!vote) isPollPunished = true;
         }
     }
 
@@ -71,12 +67,11 @@ async function processVerification(user, code, guild, replyCallback) {
     let calculation = { duration: SETTINGS.DEFAULT_VERIFY_MS, ruleText: "Default Access", isPunished: false };
     
     if (isPollPunished) {
-        calculation = { duration: 1 * 60 * 60 * 1000, ruleText: punishmentMsg, isPunished: true }; // 1 Hour Fixed
+        calculation = { duration: 1 * 60 * 60 * 1000, ruleText: "⚠️ **Penalty:** Vote on Poll!", isPunished: true }; // 1 Hour Fixed
     } else {
         try {
             const member = await guild.members.fetch(user.id);
             const { data: rules } = await supabase.from("role_rules").select("*");
-            // Simplified Role Logic
             if(rules && rules.length > 0) calculation.ruleText = "Role Boost Active"; 
         } catch (e) {}
     }
