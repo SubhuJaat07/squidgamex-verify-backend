@@ -1,200 +1,234 @@
-const { SETTINGS, supabase, createEmbed, formatTime, parseDuration, logToWebhook } = require("./config");
-const { EmbedBuilder } = require("discord.js");
+/**********************************************************************
+ * 🔐 VERIFICATION & USER MANAGEMENT
+ * Handles all logic related to user auth, rules, and admin oversight.
+ **********************************************************************/
 
-// 🔥 1. WHITELIST SYSTEM
-async function handleWhitelist(interaction) {
-    const sub = interaction.options.getSubcommand();
-    const guildId = interaction.guild.id;
-    const { data } = await supabase.from("guild_config").select("ping_whitelist").eq("guild_id", guildId).maybeSingle();
-    let list = data?.ping_whitelist || [];
+const { SETTINGS, supabase, EmbedFactory, TimeUtils, Logger } = require("./config");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
-    if (sub === "add") {
-        const user = interaction.options.getUser("user");
-        const role = interaction.options.getRole("role");
-        let added = [];
-        if (user && !list.includes(user.id)) { list.push(user.id); added.push(`<@${user.id}>`); }
-        if (role && !list.includes(role.id)) { list.push(role.id); added.push(`<@&${role.id}>`); }
-        if (added.length === 0) return interaction.reply({ embeds: [createEmbed("⚠️ Exists", "Already in whitelist.", SETTINGS.COLOR_WARN)], ephemeral: true });
-        await supabase.from("guild_config").upsert({ guild_id: guildId, ping_whitelist: list }, { onConflict: 'guild_id' });
-        return interaction.reply({ embeds: [createEmbed("✅ Whitelisted", `**Added:** ${added.join(", ")}`, SETTINGS.COLOR_SUCCESS)] });
-    }
+// ==========================================
+// 🔥 1. ROBLOX INTEGRATION
+// ==========================================
+async function handleGetRobloxId(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+    const username = interaction.options.getString("username");
 
-    if (sub === "remove") {
-        const user = interaction.options.getUser("user");
-        const role = interaction.options.getRole("role");
-        const initialLen = list.length;
-        if (user) list = list.filter(id => id !== user.id);
-        if (role) list = list.filter(id => id !== role.id);
-        if (list.length === initialLen) return interaction.reply({ embeds: [createEmbed("❌ Not Found", "Target not in whitelist.", SETTINGS.COLOR_ERROR)], ephemeral: true });
-        await supabase.from("guild_config").upsert({ guild_id: guildId, ping_whitelist: list }, { onConflict: 'guild_id' });
-        return interaction.reply({ embeds: [createEmbed("🗑️ Removed", "Removed from whitelist.", SETTINGS.COLOR_WARN)] });
-    }
-
-    if (sub === "list") {
-        const desc = list.length > 0 ? list.map(id => `🛡️ <@${id}> / <@&${id}>`).join("\n") : "No one whitelisted.";
-        return interaction.reply({ embeds: [createEmbed("🛡️ Anti-Ping Whitelist", desc, SETTINGS.COLOR_INFO)] });
+    try {
+        const response = await fetch(SETTINGS.ROBLOX_API_USER, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ usernames: [username], excludeBannedUsers: true })
+        });
+        
+        const json = await response.json();
+        
+        if (json.data && json.data.length > 0) {
+            const rUser = json.data[0];
+            const embed = EmbedFactory.success("✅ Roblox Account Found", 
+                `**Username:** ${rUser.name}\n**ID:** \`${rUser.id}\`\n\n👇 **Copy & Run Command:**\n\`/linkroblox roblock_id:${rUser.id}\``
+            );
+            return interaction.editReply({ embeds: [embed] });
+        } else {
+            return interaction.editReply({ embeds: [EmbedFactory.error("❌ Not Found", `User **${username}** does not exist on Roblox.`)] });
+        }
+    } catch (e) {
+        console.error(e);
+        return interaction.editReply({ content: "⚠️ Roblox API Error. Try again later." });
     }
 }
 
-// 🔥 2. CUSTOM CODE
+async function handleLinkRoblox(interaction) {
+    const rId = interaction.options.getString("roblox_id");
+    
+    // Validation
+    if (!/^\d+$/.test(rId)) {
+        return interaction.reply({ embeds: [EmbedFactory.error("❌ Invalid Format", "Roblox ID must contain only numbers.")], ephemeral: true });
+    }
+
+    try {
+        await supabase.from("roblox_links").upsert({ discord_id: interaction.user.id, roblox_id: rId });
+        return interaction.reply({ embeds: [EmbedFactory.success("✅ Linked Successfully", `Your Discord is now linked to Roblox ID: \`${rId}\`.\nYou can now verify.`)] });
+    } catch (e) {
+        return interaction.reply({ content: "❌ Database Error", ephemeral: true });
+    }
+}
+
+// ==========================================
+// 🔥 2. CUSTOM CODE & LOOKUP
+// ==========================================
 async function handleSetCode(interaction) {
     const user = interaction.options.getUser("user");
     const code = interaction.options.getString("code");
-    await supabase.from("verifications").upsert({ discord_id: user.id, code: code, verified: false }, { onConflict: 'discord_id' });
-    return interaction.reply({ embeds: [createEmbed("✅ Custom Code", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
+
+    try {
+        await supabase.from("verifications").upsert({ 
+            discord_id: user.id, 
+            code: code, 
+            verified: false 
+        }, { onConflict: 'discord_id' });
+
+        return interaction.reply({ embeds: [EmbedFactory.success("✅ Code Updated", `**User:** ${user}\n**New Code:** \`${code}\``)] });
+    } catch (e) {
+        return interaction.reply({ content: "❌ Failed to set code.", ephemeral: true });
+    }
 }
 
-// 🔥 3. SET EXPIRY (Restored)
-async function handleSetExpiry(interaction) {
-    const ms = parseDuration(interaction.options.getString("duration"));
-    const target = interaction.options.getString("target");
-    const note = interaction.options.getString("note") || null;
-    const expiry = ms === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + ms).toISOString();
-    
-    await supabase.from("verifications").update({ verified: true, expires_at: expiry, note: note }).or(`code.eq.${target},hwid.eq.${target}`);
-    return interaction.reply({ embeds: [createEmbed("✅ Expiry Updated", `**Target:** \`${target}\`\n**Duration:** \`${interaction.options.getString("duration")}\`\n**Note:** ${note || "None"}`, SETTINGS.COLOR_SUCCESS)] });
-}
-
-// 🔥 4. CHECK ALTS (Restored)
-async function handleCheckAlts(interaction) {
-    const { data: all } = await supabase.from("verifications").select("*").eq("verified", true).gt("expires_at", new Date().toISOString());
-    if (!all) return interaction.reply("✅ No Active Data");
-    const map = {};
-    all.forEach(u => { if(u.discord_id) map[u.discord_id] = (map[u.discord_id] || 0) + 1; });
-    const alts = Object.entries(map).filter(([k,v]) => v > 1).map(([k,v]) => `<@${k}>: **${v} Keys**`).join("\n");
-    return interaction.reply({ embeds: [createEmbed("🕵️ Alt Accounts", alts || "No alts detected.", alts ? SETTINGS.COLOR_WARN : SETTINGS.COLOR_SUCCESS)] });
-}
-
-// 🔥 5. ACTIVE USERS
-async function handleActiveUsers(interaction) {
-    const { data, count } = await supabase.from("verifications").select("*", { count: 'exact' }).eq("verified", true).gt("expires_at", new Date().toISOString()).limit(20);
-    if (!data || data.length === 0) return interaction.reply({ embeds: [createEmbed("🔴 Active Users", "No active keys.", SETTINGS.COLOR_ERROR)] });
-    
-    const list = data.map((u, i) => {
-        const user = u.discord_id ? `<@${u.discord_id}>` : (u.note ? `📝 ${u.note}` : "`Unknown`");
-        const timeLeft = formatTime(new Date(u.expires_at).getTime() - Date.now());
-        return `\`${i+1}.\` ${user} • \`${u.code}\` • ⏳ ${timeLeft}`;
-    }).join("\n");
-    return interaction.reply({ embeds: [createEmbed(`🟢 Active Sessions (${count})`, list, SETTINGS.COLOR_SUCCESS)] });
-}
-
-// 🔥 6. LOOKUP (Improved)
 async function handleLookup(interaction) {
+    await interaction.deferReply();
     const target = interaction.options.getString("target");
-    const { data } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-    if (!data) return interaction.reply({ embeds: [createEmbed("❌ Not Found", `No record for \`${target}\``, SETTINGS.COLOR_ERROR)], ephemeral: true });
 
-    let pfp = null;
-    if (data.discord_id) { try { const u = await interaction.client.users.fetch(data.discord_id); pfp = u; } catch(e){} }
+    const { data } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
+
+    if (!data) return interaction.editReply({ embeds: [EmbedFactory.error("❌ Not Found", `No data found for \`${target}\`.`)] });
+
+    // Fetch Discord Info
+    let discordInfo = "`Unlinked`";
+    if (data.discord_id) {
+        try {
+            const u = await interaction.client.users.fetch(data.discord_id);
+            discordInfo = `${u} (\`${u.id}\`)`;
+        } catch {}
+    }
 
     const expiry = data.expires_at ? new Date(data.expires_at) : null;
     const isActive = expiry && expiry > new Date();
-    const status = data.is_banned ? "🚫 BANNED" : (isActive ? "🟢 ACTIVE" : "🔴 EXPIRED");
+    const status = data.is_banned ? "🔴 **BANNED**" : (isActive ? "🟢 **ACTIVE**" : "🟡 **EXPIRED**");
 
-    const embed = createEmbed("🔍 Lookup Details", "", data.is_banned ? SETTINGS.COLOR_ERROR : SETTINGS.COLOR_INFO, pfp)
+    const embed = EmbedFactory.create("🔍 User Lookup", "", data.is_banned ? SETTINGS.COLORS.ERROR : SETTINGS.COLORS.INFO)
         .addFields(
-            { name: "👤 User", value: data.discord_id ? `<@${data.discord_id}>` : "`Unlinked`", inline: true },
+            { name: "👤 User", value: discordInfo, inline: false },
+            { name: "🔑 License Key", value: `\`${data.code}\``, inline: true },
+            { name: "📡 Status", value: status, inline: true },
             { name: "📝 Note", value: data.note ? `\`${data.note}\`` : "`None`", inline: true },
-            { name: "🔑 Code", value: `\`${data.code}\``, inline: true },
-            { name: "📡 Status", value: `**${status}**`, inline: true },
-            { name: "🖥️ HWID", value: `\`${data.hwid}\``, inline: false },
-            { name: "⏳ Expires", value: expiry ? `<t:${Math.floor(expiry.getTime()/1000)}:R>` : "`N/A`", inline: true }
+            { name: "🖥️ Hardware ID", value: `\`${data.hwid || "None"}\``, inline: false },
+            { name: "⏳ Expires In", value: expiry ? `<t:${Math.floor(expiry.getTime()/1000)}:R>` : "`Never`", inline: true }
         );
-    return interaction.reply({ embeds: [embed] });
+
+    return interaction.editReply({ embeds: [embed] });
 }
 
-// 🔥 7. RULES SYSTEM
-async function handleRules(interaction) {
-    const sub = interaction.options.getSubcommand();
-    if (sub === "set") {
-        const role = interaction.options.getRole("role");
-        const dur = interaction.options.getString("duration");
-        await supabase.from("role_rules").upsert({ role_id: role.id, role_name: role.name, duration: dur }, { onConflict: 'role_id' });
-        return interaction.reply({ embeds: [createEmbed("✅ Rule Set", `**Role:** ${role}\n**Time:** \`${dur}\``, SETTINGS.COLOR_SUCCESS)] });
-    }
-    if (sub === "remove") {
-        const role = interaction.options.getRole("role");
-        await supabase.from("role_rules").delete().eq("role_id", role.id);
-        return interaction.reply({ embeds: [createEmbed("🗑️ Removed", `Rule deleted for ${role}`, SETTINGS.COLOR_WARN)] });
-    }
-    if (sub === "list") {
-        const { data } = await supabase.from("role_rules").select("*");
-        const desc = data.map(r => `• <@&${r.role_id}> ➜ **${r.duration}**`).join("\n") || "None";
-        return interaction.reply({ embeds: [createEmbed("📜 Rules", desc, SETTINGS.COLOR_INFO)] });
+// ==========================================
+// 🔥 3. ACTIVE USERS & RULES
+// ==========================================
+async function handleActiveUsers(interaction, page = 1) {
+    const LIMIT = 10;
+    const offset = (page - 1) * LIMIT;
+
+    try {
+        const { data, count } = await supabase.from("verifications")
+            .select("*", { count: 'exact' })
+            .eq("verified", true)
+            .gt("expires_at", new Date().toISOString())
+            .range(offset, offset + LIMIT - 1);
+
+        if (!data || data.length === 0) {
+            return interaction.reply({ embeds: [EmbedFactory.error("🔴 No Active Users", "No one is currently verified.")], ephemeral: true });
+        }
+
+        const list = data.map((u, i) => {
+            const timeLeft = TimeUtils.formatMs(new Date(u.expires_at).getTime() - Date.now());
+            const userRef = u.discord_id ? `<@${u.discord_id}>` : `\`Unknown\``;
+            return `**${offset + i + 1}.** ${userRef}\n   └ 🔑 \`${u.code}\` • ⏳ ${timeLeft}`;
+        }).join("\n\n");
+
+        const embed = EmbedFactory.create(`🟢 Active Sessions (Page ${page})`, list, SETTINGS.COLORS.SUCCESS)
+            .setFooter({ text: `Total Online: ${count} Users • Page ${page}` });
+
+        // Add Pagination Buttons (Logic in index.js)
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`active_prev_${page}`).setLabel("◀ Prev").setStyle(ButtonStyle.Secondary).setDisabled(page===1),
+            new ButtonBuilder().setCustomId(`active_next_${page}`).setLabel("Next ▶").setStyle(ButtonStyle.Secondary).setDisabled(offset + LIMIT >= count)
+        );
+
+        if (interaction.message) await interaction.update({ embeds: [embed], components: [row] });
+        else await interaction.reply({ embeds: [embed], components: [row] });
+
+    } catch (e) {
+        console.error(e);
+        return interaction.reply({ content: "❌ Error fetching list.", ephemeral: true });
     }
 }
 
-// 🔥 8. VERIFICATION CORE
+// ==========================================
+// 🔥 4. MAIN VERIFICATION PROCESS
+// ==========================================
 async function processVerification(user, code, guild, replyCallback) {
-    if (SETTINGS.MAINTENANCE) return replyCallback({ content: "🚧 Maintenance", ephemeral: true });
+    if (SETTINGS.MAINTENANCE_MODE) return replyCallback({ content: "🚧 System is in Maintenance Mode.", ephemeral: true });
 
-    // Link Check
+    // 1. Check Roblox Link
     const { data: link } = await supabase.from("roblox_links").select("*").eq("discord_id", user.id).maybeSingle();
-    if (!link) return replyCallback({ embeds: [createEmbed("⚠️ Link Required", "Use `/getid` then `/linkroblox` to link your account first.", SETTINGS.COLOR_WARN)] });
+    if (!link) {
+        return replyCallback({ 
+            embeds: [EmbedFactory.create("⚠️ Action Required", "You must link your Roblox account first.\n\n👉 Use `/getid` then `/linkroblox`.", SETTINGS.COLORS.WARNING)] 
+        });
+    }
 
-    // Poll Punishment
-    let isPollPunished = false;
-    let pollLink = "";
-    if (SETTINGS.POLL_LOCK) {
-        const { data: activePoll } = await supabase.from("polls").select("id, channel_id").eq("is_active", true).limit(1).maybeSingle();
+    // 2. Poll Punishment Check
+    let isPunished = false;
+    let pollUrl = null;
+    if (SETTINGS.POLL_LOCK_SYSTEM) {
+        const { data: activePoll } = await supabase.from("polls").select("*").eq("is_active", true).limit(1).maybeSingle();
         if (activePoll) {
             const { data: vote } = await supabase.from("poll_votes").select("*").eq("poll_id", activePoll.id).eq("user_id", user.id).maybeSingle();
             if (!vote) {
-                isPollPunished = true;
-                pollLink = `https://discord.com/channels/${SETTINGS.GUILD_ID}/${activePoll.channel_id}`;
+                isPunished = true;
+                pollUrl = `https://discord.com/channels/${guild.id}/${activePoll.channel_id}`;
             }
         }
     }
 
+    // 3. Validate Code
     const { data: userData } = await supabase.from("verifications").select("*").eq("code", code).limit(1).maybeSingle();
-    if (!userData) return replyCallback({ embeds: [createEmbed("❌ Invalid Code", "Get key from game.", SETTINGS.COLOR_ERROR)] });
-    if (userData.is_banned) return replyCallback({ embeds: [createEmbed("🚫 BANNED", "You are permanently banned.", SETTINGS.COLOR_ERROR)] });
+    if (!userData) return replyCallback({ embeds: [EmbedFactory.error("❌ Invalid Code", "Please get a valid key from the game.")] });
+    if (userData.is_banned) return replyCallback({ embeds: [EmbedFactory.error("🚫 BANNED", "Your access has been permanently revoked.")] });
 
-    let duration = isPollPunished ? SETTINGS.DEFAULT_PUNISH_MS : SETTINGS.DEFAULT_VERIFY_MS;
-    let ruleName = isPollPunished ? "⚠️ Poll Penalty" : "Default";
+    // 4. Calculate Time
+    let duration = SETTINGS.DEFAULT_VERIFY_MS;
+    let ruleText = "Default";
 
-    if (!isPollPunished) {
+    if (isPunished) {
+        duration = SETTINGS.DEFAULT_PUNISH_MS;
+        ruleText = "⚠️ Poll Penalty (No Vote)";
+    } else {
         try {
             const member = await guild.members.fetch(user.id);
             const { data: rules } = await supabase.from("role_rules").select("*");
-            rules?.forEach(r => {
-                if (member.roles.cache.has(r.role_id)) {
-                    const d = parseDuration(r.duration);
-                    if (d > duration || d === "LIFETIME") { duration = d; ruleName = `⭐ ${r.role_name}`; }
-                }
-            });
-        } catch(e){}
+            if (rules) {
+                rules.forEach(r => {
+                    if (member.roles.cache.has(r.role_id)) {
+                        const d = TimeUtils.parseDuration(r.duration);
+                        if (d === "LIFETIME" || d > duration) {
+                            duration = d;
+                            ruleText = `⭐ ${r.role_name} Boost`;
+                        }
+                    }
+                });
+            }
+        } catch (e) { console.error("Role Check Error:", e); }
     }
 
-    const expiry = duration === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + duration).toISOString();
-    await supabase.from("verifications").update({ verified: true, expires_at: expiry, discord_id: user.id }).eq("id", userData.id);
+    // 5. Update Database
+    const expiryDate = duration === "LIFETIME" ? new Date(Date.now() + 3153600000000) : new Date(Date.now() + duration);
+    await supabase.from("verifications").update({ verified: true, expires_at: expiryDate.toISOString(), discord_id: user.id }).eq("id", userData.id);
 
-    return replyCallback({ embeds: [createEmbed(isPollPunished?"⚠️ Verified (Restricted)":"✅ Verified", isPollPunished?`**Vote Penalty Applied!**\n[Vote Here](${pollLink})`:`**Access Granted**`, isPollPunished?SETTINGS.COLOR_WARN:SETTINGS.COLOR_SUCCESS, user).addFields({name:"⏳ Time",value:`\`${formatTime(duration)}\``,inline:true}, {name:"📜 Logic",value:ruleName,inline:true})] });
+    // 6. Security Log
+    const { data: keys } = await supabase.from("verifications").select("*").eq("discord_id", user.id).eq("verified", true);
+    if (keys.length > 1) Logger.log("Suspicious Activity", `<@${user.id}> verified with multiple keys!`);
+
+    // 7. Success Embed
+    const embed = EmbedFactory.create(
+        isPunished ? "⚠️ Verified (Restricted)" : "✅ Verification Successful",
+        isPunished ? `**You have been punished for not voting!**\n[Click here to Vote](${pollUrl})` : "**Access Granted Successfully.**",
+        isPunished ? SETTINGS.COLORS.WARNING : SETTINGS.COLORS.SUCCESS,
+        user
+    ).addFields(
+        { name: "🔑 License Key", value: `\`${code}\``, inline: true },
+        { name: "⏳ Time Added", value: `\`${TimeUtils.formatMs(duration)}\``, inline: true },
+        { name: "📜 Logic", value: `\`${ruleText}\``, inline: true },
+        { name: "📅 Expires At", value: `<t:${Math.floor(expiryDate.getTime()/1000)}:F>`, inline: false }
+    );
+
+    return replyCallback({ embeds: [embed] });
 }
 
-// Helpers
-async function handleGetRobloxId(interaction) {
-    const name = interaction.options.getString("username");
-    try {
-        const res = await fetch(SETTINGS.ROBLOX_API, { method: 'POST', headers: {'Content-Type': 'json'}, body: JSON.stringify({ usernames: [name], excludeBannedUsers: true }) });
-        const json = await res.json();
-        if(json.data?.length) return interaction.reply({ embeds: [createEmbed("✅ ID Found", `ID: \`${json.data[0].id}\``, SETTINGS.COLOR_SUCCESS)] });
-        return interaction.reply({ content: "❌ Not found", ephemeral: true });
-    } catch(e) { return interaction.reply({ content: "❌ Error", ephemeral: true }); }
-}
-
-async function handleLinkRoblox(interaction) {
-    const id = interaction.options.getString("roblox_id");
-    await supabase.from("roblox_links").upsert({ discord_id: interaction.user.id, roblox_id: id });
-    return interaction.reply({ embeds: [createEmbed("✅ Linked", `ID: \`${id}\``, SETTINGS.COLOR_SUCCESS)] });
-}
-
-async function handleBanSystem(interaction) {
-    const sub = interaction.options.getSubcommand();
-    const target = interaction.options.getString("target");
-    if(sub==="ban") { await supabase.from("verifications").update({is_banned:true, verified:false}).or(`code.eq.${target},hwid.eq.${target}`); return interaction.reply({embeds:[createEmbed("🚫 Banned", target, SETTINGS.COLOR_ERROR)]}); }
-    if(sub==="unban") { await supabase.from("verifications").update({is_banned:false}).or(`code.eq.${target},hwid.eq.${target}`); return interaction.reply({embeds:[createEmbed("✅ Unbanned", target, SETTINGS.COLOR_SUCCESS)]}); }
-    if(sub==="list") { const {data}=await supabase.from("verifications").select("*").eq("is_banned",true); return interaction.reply({embeds:[createEmbed("📜 Ban List", data.map(u=>u.code).join("\n")||"None", SETTINGS.COLOR_WARN)]}); }
-}
-
-module.exports = { processVerification, handleWhitelist, handleRules, handleActiveUsers, handleGetRobloxId, handleLinkRoblox, handleSetCode, handleSetExpiry, handleCheckAlts, handleLookup, handleBanSystem };
+module.exports = { processVerification, handleGetRobloxId, handleLinkRoblox, handleActiveUsers, handleSetCode, handleLookup };
