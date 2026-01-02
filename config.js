@@ -16,11 +16,10 @@ const SETTINGS = {
     FOOTER_ICON: "https://i.imgur.com/AfFp7pu.png",
     FOOTER_TEXT: "Squid Game X • Security System",
     
-    // Theme Colors
-    COLOR_SUCCESS: 0x00FF00, // Green
-    COLOR_ERROR: 0xFF0000,   // Red
-    COLOR_INFO: 0x0099FF,    // Blue
-    COLOR_WARN: 0xFFA500,    // Orange
+    COLOR_SUCCESS: 0x00FF00,
+    COLOR_ERROR: 0xFF0000,
+    COLOR_INFO: 0x0099FF,
+    COLOR_WARN: 0xFFA500,
     
     MAINTENANCE: false
 };
@@ -28,7 +27,6 @@ const SETTINGS = {
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const webhook = new WebhookClient({ url: SETTINGS.LOG_WEBHOOK_URL });
 
-// --- 🎨 ULTRA PRO EMBED BUILDER ---
 function createEmbed(title, description, color = SETTINGS.COLOR_INFO, user = null) {
     const embed = new EmbedBuilder()
         .setTitle(title)
@@ -41,7 +39,6 @@ function createEmbed(title, description, color = SETTINGS.COLOR_INFO, user = nul
     return embed;
 }
 
-// --- LOGGING ---
 async function logToWebhook(title, desc, color = SETTINGS.COLOR_WARN) {
     try {
         const embed = new EmbedBuilder().setTitle(title).setDescription(desc).setColor(color).setTimestamp();
@@ -49,7 +46,6 @@ async function logToWebhook(title, desc, color = SETTINGS.COLOR_WARN) {
     } catch(e) {}
 }
 
-// --- TIME UTILS ---
 function parseDuration(str) {
     if (!str) return 0;
     if (str.toLowerCase() === "lifetime") return "LIFETIME";
