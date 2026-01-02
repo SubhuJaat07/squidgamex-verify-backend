@@ -2,32 +2,31 @@ const { EmbedBuilder } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
 
-// --- ⚙️ SETTINGS ---
 const SETTINGS = {
-    PORT: process.env.PORT || 10000,
+    PORT: process.env.PORT || 8000,
     SUPER_OWNER_ID: "1169492860278669312", 
     GUILD_ID: "1257403231127076915", 
     VERIFY_CHANNEL_ID: "1444769950421225542", 
-    DEFAULT_VERIFY_MS: 18 * 60 * 60 * 1000, 
-    DEFAULT_PUNISH_MS: 5 * 60 * 1000, // 5 Mins Default
-    ROBLOX_API_USER: "https://users.roblox.com/v1/usernames/users",
+    DEFAULT_VERIFY_MS: 18 * 60 * 60 * 1000, // 18 Hours
+    PUNISH_NO_VOTE_MS: 1 * 60 * 60 * 1000,  // 1 Hour
+    ROBLOX_API: "https://users.roblox.com/v1/usernames/users",
     MAINTENANCE: false,
     POLL_LOCK: false
 };
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// --- HELPERS ---
 function createEmbed(title, description, color = 0x0099FF) {
     const safeDesc = (description && description.length > 0) ? description : "Processing...";
     return new EmbedBuilder()
         .setTitle(title)
         .setDescription(safeDesc)
         .setColor(color)
-        .setFooter({ text: "Developed By Subhu Jaat", iconURL: "https://i.imgur.com/AfFp7pu.png" })
+        .setFooter({ text: "Developed By Subhu Jaat • Squid Game X", iconURL: "https://i.imgur.com/AfFp7pu.png" })
         .setTimestamp();
 }
 
+// Time Parser (e.g., 1d, 1h, 30m)
 function parseDuration(str) {
     if (!str) return 0;
     if (str.toLowerCase() === "lifetime") return "LIFETIME";
@@ -62,11 +61,12 @@ async function isAdmin(userId) {
     return !!data;
 }
 
+// Safety Wrapper
 async function safeReply(interaction, options) {
     try {
         if (interaction.replied || interaction.deferred) await interaction.editReply(options);
         else await interaction.reply(options);
-    } catch (e) {}
+    } catch (e) { console.error("Reply Error:", e.message); }
 }
 
 module.exports = { SETTINGS, supabase, createEmbed, parseDuration, formatTime, isAdmin, safeReply };
