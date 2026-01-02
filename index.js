@@ -1,27 +1,26 @@
 const express = require("express");
 const cors = require("cors");
-const { Client, GatewayIntentBits, Partials, Routes, REST, SlashCommandBuilder, AuditLogEvent, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, Routes, REST, SlashCommandBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
 const { SETTINGS, supabase, isAdmin, createEmbed, safeReply, parseDuration } = require("./config");
-const { processVerification, handleGetRobloxId, handleLinkRoblox, handleBanSystem, handleRules, handleLookup, handleCheckAlts, handleSetExpiry } = require("./verification");
-const { showBatchSync, handleBatchSync, trackJoin } = require("./invite");
+const { processVerification, handleGetRobloxId, handleLinkRoblox, handleActiveUsers, handleRules, handleLookup } = require("./verification");
+const { showBatchSync, handleBatchSync, trackJoin, handleLeaderboard, handleWhoInvited, handleAddReward } = require("./invite");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ API (FIXED NO-CODE-RESET)
+// API
 app.get("/", (req, res) => res.send("System Online 🟢"));
 app.get("/check", async (req, res) => {
     if (SETTINGS.MAINTENANCE) return res.json({ status: "ERROR", message: "Maintenance" });
     const { hwid } = req.query;
-    if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
+    if (!hwid) return res.json({ status: "ERROR" });
     try {
         const { data } = await supabase.from("verifications").select("*").eq("hwid", hwid).maybeSingle();
         if (data) {
             if (data.is_banned) return res.json({ status: "BANNED" });
             const now = new Date();
-            const expiry = new Date(data.expires_at);
-            if (data.verified && expiry > now) return res.json({ status: "VALID" });
+            if (data.verified && new Date(data.expires_at) > now) return res.json({ status: "VALID" });
             return res.json({ status: "NEED_VERIFY", code: data.code });
         }
         const code = Math.floor(100000 + Math.random() * 900000).toString();
@@ -36,7 +35,7 @@ const client = new Client({
     partials: [Partials.GuildMember, Partials.Channel]
 });
 
-// COMMANDS REGISTRATION
+// COMMANDS
 const commands = [
     new SlashCommandBuilder().setName("verify").setDescription("Verify Script").addStringOption(o=>o.setName("code").setRequired(true).setDescription("Code")),
     new SlashCommandBuilder().setName("getid").setDescription("Get Roblox ID").addStringOption(o=>o.setName("username").setRequired(true).setDescription("Username")),
@@ -44,31 +43,34 @@ const commands = [
     new SlashCommandBuilder().setName("activeusers").setDescription("Active Users List"),
     new SlashCommandBuilder().setName("syncmissing").setDescription("Admin: Sync DB (Batch)"),
     new SlashCommandBuilder().setName("whoinvited").setDescription("Check inviter").addUserOption(o=>o.setName("user").setRequired(true).setDescription("User")),
+    new SlashCommandBuilder().setName("leaderboard").setDescription("Invite Leaderboard"),
     new SlashCommandBuilder().setName("lookup").setDescription("Admin: Lookup").addStringOption(o=>o.setName("target").setRequired(true).setDescription("Code/HWID")),
-    new SlashCommandBuilder().setName("checkalts").setDescription("Admin: Check Alts"),
-    new SlashCommandBuilder().setName("setexpiry").setDescription("Admin: Add Time").addStringOption(o=>o.setName("target").setRequired(true).setDescription("Code/HWID")).addStringOption(o=>o.setName("duration").setRequired(true).setDescription("1d, 1h")),
-    new SlashCommandBuilder().setName("config").setDescription("Super Admin").addSubcommand(s=>s.setName("setpunish").setDescription("Ping Timeout").addStringOption(o=>o.setName("duration").setRequired(true).setDescription("10m"))),
+    new SlashCommandBuilder().setName("setexpiry").setDescription("Admin: Add Time").addStringOption(o=>o.setName("target").setRequired(true).setDescription("Code/HWID")).addStringOption(o=>o.setName("duration").setRequired(true).setDescription("Time")),
     
-    // ADMIN
-    new SlashCommandBuilder().setName("admin").setDescription("Tools")
-        .addSubcommand(s => s.setName("say").setDescription("Bot Says").addStringOption(o => o.setName("msg").setRequired(true).setDescription("Message")))
-        .addSubcommand(s => s.setName("announce").setDescription("Announce").addStringOption(o => o.setName("title").setRequired(true).setDescription("Title")).addStringOption(o => o.setName("msg").setRequired(true).setDescription("Msg")).addStringOption(o => o.setName("img").setDescription("Image URL")))
-        .addSubcommand(s => s.setName("poll").setDescription("Poll").addStringOption(o => o.setName("q").setRequired(true).setDescription("Q")).addStringOption(o => o.setName("o1").setRequired(true).setDescription("1")).addStringOption(o => o.setName("o2").setRequired(true).setDescription("2")).addStringOption(o => o.setName("o3").setDescription("3")).addStringOption(o => o.setName("o4").setDescription("4")))
-        .addSubcommand(s => s.setName("pollresults").setDescription("Results").addIntegerOption(o => o.setName("pollid").setDescription("ID")))
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
-
-    // BAN
-    new SlashCommandBuilder().setName("bansystem").setDescription("Ban System")
-        .addSubcommand(s => s.setName("ban").setDescription("Ban").addStringOption(o => o.setName("target").setRequired(true).setDescription("Code/HWID")))
-        .addSubcommand(s => s.setName("unban").setDescription("Unban").addStringOption(o => o.setName("target").setRequired(true).setDescription("Code/HWID")))
-        .addSubcommand(s => s.setName("list").setDescription("List Bans"))
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator),
+    // ADMIN POLLS
+    new SlashCommandBuilder().setName("poll").setDescription("Create Advanced Poll")
+        .addStringOption(o => o.setName("q").setRequired(true).setDescription("Question"))
+        .addStringOption(o => o.setName("o1").setRequired(true).setDescription("Option 1"))
+        .addStringOption(o => o.setName("o2").setRequired(true).setDescription("Option 2"))
+        .addStringOption(o => o.setName("o3").setDescription("Option 3"))
+        .addStringOption(o => o.setName("o4").setDescription("Option 4"))
+        .addStringOption(o => o.setName("o5").setDescription("Option 5"))
+        .addRoleOption(o => o.setName("punish_role").setDescription("Role for non-voters")),
+        
+    new SlashCommandBuilder().setName("endpoll").setDescription("End Poll & Announce").addIntegerOption(o => o.setName("pollid").setRequired(true).setDescription("Poll ID")),
+    new SlashCommandBuilder().setName("pollresults").setDescription("Detailed Results").addIntegerOption(o => o.setName("pollid").setDescription("ID")),
 
     // RULES
     new SlashCommandBuilder().setName("rules").setDescription("Rule System")
-        .addSubcommand(s => s.setName("set").setDescription("Set Rule").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")).addStringOption(o => o.setName("duration").setRequired(true).setDescription("1d")))
-        .addSubcommand(s => s.setName("list").setDescription("List Rules"))
-        .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+        .addSubcommand(s => s.setName("set").setDescription("Set Rule").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")).addStringOption(o => o.setName("duration").setRequired(true).setDescription("Time")))
+        .addSubcommand(s => s.setName("remove").setDescription("Remove Rule").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")))
+        .addSubcommand(s => s.setName("list").setDescription("List Rules")),
+
+    // CONFIG
+    new SlashCommandBuilder().setName("config").setDescription("Config")
+        .addSubcommand(s=>s.setName("addreward").setDescription("Add Invite Reward").addIntegerOption(o=>o.setName("invites").setRequired(true).setDescription("Count")).addRoleOption(o=>o.setName("role").setRequired(true).setDescription("Role")))
+        .addSubcommand(s=>s.setName("setpunish").setDescription("Ping Timeout").addStringOption(o=>o.setName("duration").setRequired(true).setDescription("Time")))
+
 ].map(c => c.toJSON());
 
 client.once("ready", async () => {
@@ -77,116 +79,128 @@ client.once("ready", async () => {
     try { await rest.put(Routes.applicationGuildCommands(client.user.id, SETTINGS.GUILD_ID), { body: commands }); } catch(e) { console.error(e); }
 });
 
-// 🔥 MESSAGE & ANTI-PING
-client.on("messageCreate", async (message) => {
-    if (message.author.bot) return;
-    
-    if (message.mentions.users.has(SETTINGS.SUPER_OWNER_ID) && message.author.id !== SETTINGS.SUPER_OWNER_ID && !message.reference) {
-        try {
-            const { data: config } = await supabase.from("guild_config").select("ping_timeout_ms").eq("guild_id", message.guild.id).maybeSingle();
-            const duration = config ? config.ping_timeout_ms : SETTINGS.DEFAULT_PUNISH_MS;
-            if (message.member.moderatable) {
-                await message.member.timeout(duration, "Pinging Owner"); 
-                message.reply(`⚠️ **No Pinging Owner!** (${duration/60000}m Timeout)`).then(m=>setTimeout(()=>m.delete(),8000));
-            }
-        } catch (e) {}
-    }
-
-    if (message.content.toLowerCase().startsWith("verify ")) {
-        const code = message.content.split(" ")[1];
-        if (message.channel.id === SETTINGS.VERIFY_CHANNEL_ID || await isAdmin(message.author.id)) {
-            await processVerification(message.author, code, message.guild, (opts) => message.reply(opts));
-        }
-    }
-});
-
-// 🔥 ANTI-UNPUNISH
-client.on(AuditLogEvent.MemberUpdate, async (entry, guild) => {
-    const change = entry.changes.find(c => c.key === 'communication_disabled_until' && c.old && !c.new);
-    if (!change || entry.executorId === SETTINGS.SUPER_OWNER_ID || entry.executorId === client.user.id) return;
-    try {
-        const executor = await guild.members.fetch(entry.executorId);
-        if (executor.moderatable) await executor.timeout(10 * 60 * 1000, "Unauthorised Timeout Removal");
-        const target = await guild.members.fetch(entry.targetId);
-        if (target.moderatable) await target.timeout(5 * 60 * 1000, "Timeout Re-applied");
-    } catch (e) {}
-});
-
-// HANDLERS
+// INTERACTION HANDLER
 client.on("interactionCreate", async interaction => {
     try {
         if (interaction.customId?.startsWith('sync_')) { await handleBatchSync(interaction); return; }
-        // Poll Buttons
+        
+        // 🔥 LIVE POLL VOTE (Hidden Count Update)
         if (interaction.isButton() && interaction.customId.startsWith('vote_')) {
             const [_, pid, ch] = interaction.customId.split('_');
             await interaction.deferReply({ ephemeral: true });
+            
+            // Upsert Vote
             await supabase.from("poll_votes").upsert({ poll_id: parseInt(pid), user_id: interaction.user.id, choice: parseInt(ch) });
-            return interaction.editReply("✅ Voted!");
-        }
-        if (interaction.isButton() && interaction.customId.startsWith('copy_')) {
-            await interaction.deferReply({ ephemeral: true });
-            const { data } = await supabase.from("verifications").select("*").eq("code", interaction.customId.split('_')[1]).maybeSingle();
-            return data ? interaction.editReply(`Code: \`${data.code}\`\nHWID: \`${data.hwid}\``) : interaction.editReply("❌ Not Found");
+            
+            // Get Total Count ONLY
+            const { count } = await supabase.from("poll_votes").select("*", { count: 'exact', head: true }).eq("poll_id", pid);
+            
+            // Update Message Footer
+            const oldEmbed = interaction.message.embeds[0];
+            const newEmbed = EmbedBuilder.from(oldEmbed).setFooter({ text: `Developed By Subhu Jaat • Live Votes: ${count || 1}` });
+            
+            await interaction.message.edit({ embeds: [newEmbed] });
+            return interaction.editReply("✅ Vote Recorded!");
         }
 
         if (!interaction.isChatInputCommand()) return;
 
-        if (interaction.commandName === "getid") await handleGetRobloxId(interaction);
-        if (interaction.commandName === "linkroblox") await handleLinkRoblox(interaction);
+        // Command Routing
         if (interaction.commandName === "verify") {
             await interaction.deferReply();
             await processVerification(interaction.user, interaction.options.getString("code"), interaction.guild, (opts) => interaction.editReply(opts));
         }
-        if (interaction.commandName === "bansystem") await handleBanSystem(interaction);
+        if (interaction.commandName === "getid") await handleGetRobloxId(interaction);
+        if (interaction.commandName === "linkroblox") await handleLinkRoblox(interaction);
+        if (interaction.commandName === "activeusers") await handleActiveUsers(interaction);
         if (interaction.commandName === "rules") await handleRules(interaction);
+        if (interaction.commandName === "syncmissing") { await interaction.deferReply({ ephemeral: true }); await showBatchSync(interaction); }
+        if (interaction.commandName === "leaderboard") await handleLeaderboard(interaction);
+        if (interaction.commandName === "whoinvited") await handleWhoInvited(interaction);
+        if (interaction.commandName === "config" && interaction.options.getSubcommand() === "addreward") await handleAddReward(interaction);
         if (interaction.commandName === "lookup") await handleLookup(interaction);
-        if (interaction.commandName === "checkalts") await handleCheckAlts(interaction);
-        if (interaction.commandName === "setexpiry") await handleSetExpiry(interaction);
-        if (interaction.commandName === "syncmissing") {
-            if (!await isAdmin(interaction.user.id)) return safeReply(interaction, { content: "❌ Admin", ephemeral: true });
+
+        // SET EXPIRY
+        if (interaction.commandName === "setexpiry") {
+            if(!await isAdmin(interaction.user.id)) return interaction.reply("❌ Admin Only");
             await interaction.deferReply();
-            await showBatchSync(interaction);
-        }
-        
-        // ADMIN SAY/ANNOUNCE/POLL
-        if (interaction.commandName === "admin") {
-            const sub = interaction.options.getSubcommand();
-            if (sub === "say") { await interaction.channel.send(interaction.options.getString("msg")); return interaction.reply({content:"✅", ephemeral:true}); }
-            if (sub === "announce") {
-                const embed = createEmbed(interaction.options.getString("title"), interaction.options.getString("msg"), 0xFFD700);
-                if(interaction.options.getString("img")) embed.setImage(interaction.options.getString("img"));
-                await interaction.channel.send({embeds:[embed]});
-                return interaction.reply({content:"✅", ephemeral:true});
-            }
-            if (sub === "poll") {
-                const q = interaction.options.getString("q");
-                const opts = [1,2,3,4,5].map(i => interaction.options.getString(`o${i}`)).filter(o=>o);
-                const {data} = await supabase.from("polls").insert({ question: q, option1: opts[0], option2: opts[1]||"", is_active: true }).select().single();
-                const embed = createEmbed(`📊 Poll #${data.id}`, `**${q}**\n`+opts.map((o,i)=>`${i+1}️⃣ ${o}`).join('\n'), 0xFFA500);
-                const row = new ActionRowBuilder().addComponents(opts.map((_,i)=>new ButtonBuilder().setCustomId(`vote_${data.id}_${i+1}`).setLabel(`${i+1}`).setStyle(ButtonStyle.Primary)));
-                await interaction.channel.send({ content: "@everyone", embeds: [embed], components: [row] });
-                return interaction.reply({content:"✅ Started", ephemeral:true});
-            }
-            if (sub === "pollresults") {
-                await interaction.deferReply();
-                let pid = interaction.options.getInteger("pollid");
-                if(!pid) { const {data}=await supabase.from("polls").select("id").order('created_at',{ascending:false}).limit(1).maybeSingle(); if(data) pid=data.id; }
-                const {data:poll}=await supabase.from("polls").select("*").eq("id", pid).maybeSingle();
-                const {data:votes}=await supabase.from("poll_votes").select("user_id, choice").eq("poll_id", pid);
-                if(!poll) return interaction.editReply("❌ Not Found");
-                let desc = `**Q: ${poll.question}**\n\n`;
-                for(let i=1; i<=5; i++) {
-                    const v = votes.filter(x=>x.choice===i).map(x=>`<@${x.user_id}>`).join(", ");
-                    if(v) desc += `**Option ${i}:** ${v}\n`;
-                }
-                return interaction.editReply({embeds:[createEmbed(`📊 Results #${pid}`, desc, 0x00FFFF)]});
-            }
-        }
-        if (interaction.commandName === "config" && interaction.options.getSubcommand() === "setpunish") {
-            if (interaction.user.id !== SETTINGS.SUPER_OWNER_ID) return interaction.reply({content: "❌ Owner Only", ephemeral: true});
             const ms = parseDuration(interaction.options.getString("duration"));
-            await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, ping_timeout_ms: ms });
-            return interaction.reply("✅ Updated");
+            const target = interaction.options.getString("target");
+            const expiry = ms === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + ms).toISOString();
+            await supabase.from("verifications").update({ verified: true, expires_at: expiry }).or(`code.eq.${target},hwid.eq.${target}`);
+            return interaction.editReply(`✅ Updated ${target}`);
+        }
+
+        // --- POLL SYSTEM ---
+        if (interaction.commandName === "poll") {
+            if(!await isAdmin(interaction.user.id)) return interaction.reply("❌ Admin");
+            const q = interaction.options.getString("q");
+            const opts = [1,2,3,4,5].map(i => interaction.options.getString(`o${i}`)).filter(o=>o);
+            const pRole = interaction.options.getRole("punish_role");
+            
+            // Note: Add 'punish_role_id' to supabase 'polls' table manually if using this
+            const {data} = await supabase.from("polls").insert({ question: q, option1: opts[0], option2: opts[1]||"", is_active: true, channel_id: interaction.channel.id }).select().single();
+            
+            // Store punishment role in separate map or update schema if table exists
+            if(pRole) await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, [`poll_${data.id}_role`]: pRole.id });
+
+            const embed = createEmbed(`📊 Poll #${data.id}`, `**${q}**\n` + opts.map((o,i)=>`**${i+1}️⃣** ${o}`).join('\n') + `\n\n⚠️ **Warning:** Non-voters will get ${pRole ? pRole : "punished"}!`, 0xFFA500);
+            const row = new ActionRowBuilder().addComponents(opts.map((_,i)=>new ButtonBuilder().setCustomId(`vote_${data.id}_${i+1}`).setLabel(`${i+1}`).setStyle(ButtonStyle.Primary)));
+            
+            const msg = await interaction.channel.send({ content: "@everyone", embeds: [embed], components: [row] });
+            return interaction.reply({content:"✅ Poll Started", ephemeral:true});
+        }
+
+        if (interaction.commandName === "endpoll") {
+            await interaction.deferReply();
+            const pid = interaction.options.getInteger("pollid");
+            
+            // 1. Deactivate
+            await supabase.from("polls").update({ is_active: false }).eq("id", pid);
+            
+            // 2. Calc Results
+            const { data: votes } = await supabase.from("poll_votes").select("user_id, choice").eq("poll_id", pid);
+            const voters = new Set(votes.map(v => v.user_id));
+            
+            // 3. Punish Non-Voters
+            const members = await interaction.guild.members.fetch();
+            let punishedCount = 0;
+            // Fetch stored role from config or assume manual setup
+            const { data: conf } = await supabase.from("guild_config").select(`poll_${pid}_role`).eq("guild_id", interaction.guild.id).maybeSingle();
+            const roleId = conf ? conf[`poll_${pid}_role`] : null;
+
+            if (roleId) {
+                const role = interaction.guild.roles.cache.get(roleId);
+                if (role) {
+                    members.forEach(async m => {
+                        if (!m.user.bot && !voters.has(m.id)) {
+                            await m.roles.add(role).catch(()=>{});
+                            punishedCount++;
+                        }
+                    });
+                }
+            }
+
+            return interaction.editReply({ embeds: [createEmbed(`🛑 Poll #${pid} Ended`, `**Votes:** ${votes.length}\n**Punished:** ${punishedCount} users\n\nUse \`/pollresults ${pid}\` for details.`, 0xFF0000)] });
+        }
+
+        if (interaction.commandName === "pollresults") {
+            await interaction.deferReply();
+            const pid = interaction.options.getInteger("pollid");
+            const { data: poll } = await supabase.from("polls").select("*").eq("id", pid).maybeSingle();
+            if(!poll) return interaction.editReply("❌ Not Found");
+            
+            const { data: votes } = await supabase.from("poll_votes").select("user_id, choice").eq("poll_id", pid);
+            let desc = `**Q: ${poll.question}**\n\n`;
+            
+            const options = [poll.option1, poll.option2, poll.option3, poll.option4, poll.option5].filter(o=>o);
+            options.forEach((opt, i) => {
+                const idx = i+1;
+                const vList = votes.filter(v=>v.choice===idx);
+                const names = vList.map(v=>`<@${v.user_id}>`).join(", ");
+                desc += `**${idx}. ${opt} (${vList.length}):**\n${names || "No votes"}\n\n`;
+            });
+            return interaction.editReply({ embeds: [createEmbed(`📊 Detailed Results #${pid}`, desc, 0x00FFFF)] });
         }
 
     } catch (e) { console.error(e); }
