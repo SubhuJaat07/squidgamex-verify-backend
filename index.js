@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { Client, GatewayIntentBits, Partials, Routes, REST, SlashCommandBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
-const { SETTINGS, supabase, isAdmin, createEmbed, parseDuration, logToWebhook } = require("./config");
+const { SETTINGS, supabase, isAdmin, createEmbed, safeReply, parseDuration, logToWebhook } = require("./config");
 const { processVerification, handleGetRobloxId, handleLinkRoblox, handleActiveUsers, handleSetCode, handleBanSystem, handleRules, handleLookup, handleSetExpiry, handleCheckAlts } = require("./verification");
 const { handleWhitelist, handleWelcome, handleRewards, trackJoin, showBatchSync, handleBatchSync, handleLeaderboard } = require("./invite");
 
@@ -18,7 +18,8 @@ app.get("/check", async (req, res) => {
         const { data } = await supabase.from("verifications").select("*").eq("hwid", hwid).maybeSingle();
         if (data) {
             if (data.is_banned) return res.json({ status: "BANNED" });
-            if (data.verified && new Date(data.expires_at) > new Date()) return res.json({ status: "VALID" });
+            const now = new Date();
+            if (data.verified && new Date(data.expires_at) > now) return res.json({ status: "VALID" });
             return res.json({ status: "NEED_VERIFY", code: data.code });
         }
         const code = Math.floor(100000 + Math.random() * 900000).toString();
@@ -28,14 +29,16 @@ app.get("/check", async (req, res) => {
 });
 app.listen(SETTINGS.PORT, () => console.log(`🚀 API Port: ${SETTINGS.PORT}`));
 
-const client = new Client({ intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites ], partials: [Partials.GuildMember, Partials.Channel] });
+const client = new Client({ intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildModeration ], partials: [Partials.GuildMember, Partials.Channel] });
 
-// 🔥 ALL COMMANDS (DESCRIPTIONS ADDED)
+// 🔥 ALL COMMANDS (Whitelist Merged)
 const commands = [
+    // 1. WHITELIST (MERGED: Action Choice + User/Role Options)
     new SlashCommandBuilder().setName("whitelist").setDescription("Anti-Ping Whitelist")
-        .addSubcommand(s => s.setName("add").setDescription("Add").addUserOption(o=>o.setName("user").setDescription("User")).addRoleOption(o=>o.setName("role").setDescription("Role")))
-        .addSubcommand(s => s.setName("remove").setDescription("Remove").addUserOption(o=>o.setName("user").setDescription("User")).addRoleOption(o=>o.setName("role").setDescription("Role")))
-        .addSubcommand(s => s.setName("list").setDescription("List")),
+        .addStringOption(o => o.setName("action").setDescription("Select Action").setRequired(true)
+            .addChoices({name:'Add',value:'add'}, {name:'Remove',value:'remove'}, {name:'List',value:'list'}))
+        .addUserOption(o => o.setName("user").setDescription("User"))
+        .addRoleOption(o => o.setName("role").setDescription("Role")),
 
     new SlashCommandBuilder().setName("welcome").setDescription("Welcome System")
         .addSubcommand(s => s.setName("channel").setDescription("Set Channel").addChannelOption(o=>o.setName("target").setDescription("Channel").setRequired(true)))
