@@ -12,7 +12,7 @@ app.use(express.json());
 // API
 app.get("/", (req, res) => res.send("System Online 🟢"));
 app.get("/check", async (req, res) => {
-    if (SETTINGS.MAINTENANCE) return res.json({ status: "ERROR" });
+    if (SETTINGS.MAINTENANCE) return res.json({ status: "ERROR", message: "Maintenance" });
     const { hwid } = req.query;
     if (!hwid) return res.json({ status: "ERROR" });
     try {
@@ -67,9 +67,17 @@ const commands = [
     new SlashCommandBuilder().setName("endpoll").setDescription("End Poll").addIntegerOption(o => o.setName("pollid").setRequired(true).setDescription("Poll ID")),
     new SlashCommandBuilder().setName("pollresults").setDescription("Detailed Results").addIntegerOption(o => o.setName("pollid").setDescription("ID")),
 
-    // RULES & REWARDS
-    new SlashCommandBuilder().setName("rules").setDescription("Rule System").addSubcommand(s=>s.setName("set").setDescription("Set").addRoleOption(o=>o.setName("role").setRequired(true)).addStringOption(o=>o.setName("duration").setRequired(true))).addSubcommand(s=>s.setName("list").setDescription("List")),
-    new SlashCommandBuilder().setName("rewards").setDescription("Invite Rewards").addSubcommand(s=>s.setName("add").setDescription("Add").addIntegerOption(o=>o.setName("invites").setRequired(true)).addRoleOption(o=>o.setName("role").setRequired(true))).addSubcommand(s=>s.setName("list").setDescription("List")).addSubcommand(s=>s.setName("remove").setDescription("Remove").addIntegerOption(o=>o.setName("reward_id").setRequired(true)))
+    // RULES (FIXED: Added Descriptions)
+    new SlashCommandBuilder().setName("rules").setDescription("Rule System")
+        .addSubcommand(s=>s.setName("set").setDescription("Set Rule").addRoleOption(o=>o.setName("role").setRequired(true).setDescription("Target Role")).addStringOption(o=>o.setName("duration").setRequired(true).setDescription("Duration (e.g. 1d)")))
+        .addSubcommand(s=>s.setName("remove").setDescription("Remove Rule").addRoleOption(o=>o.setName("role").setRequired(true).setDescription("Target Role")))
+        .addSubcommand(s=>s.setName("list").setDescription("List Rules")),
+
+    // REWARDS (FIXED: Added Descriptions)
+    new SlashCommandBuilder().setName("rewards").setDescription("Invite Rewards")
+        .addSubcommand(s=>s.setName("add").setDescription("Add Reward").addIntegerOption(o=>o.setName("invites").setRequired(true).setDescription("Invites Needed")).addRoleOption(o=>o.setName("role").setRequired(true).setDescription("Reward Role")))
+        .addSubcommand(s=>s.setName("list").setDescription("List Rewards"))
+        .addSubcommand(s=>s.setName("remove").setDescription("Remove Reward").addIntegerOption(o=>o.setName("reward_id").setRequired(true).setDescription("Reward ID")))
 
 ].map(c => c.toJSON());
 
