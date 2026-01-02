@@ -1,38 +1,37 @@
 const { ActionRowBuilder, UserSelectMenuBuilder } = require("discord.js");
 const { supabase, createEmbed, SETTINGS } = require("./config");
 
-// 🔥 1. MERGED WELCOME COMMAND
+// 🔥 1. MERGED WELCOME SYSTEM
 async function handleWelcome(interaction) {
     const sub = interaction.options.getSubcommand();
     const guildId = interaction.guild.id;
 
     if (sub === "channel") {
         const ch = interaction.options.getChannel("target");
-        await supabase.from("guild_config").upsert({ guild_id: guildId, welcome_channel: ch.id, welcome_enabled: true });
-        return interaction.reply(`✅ Welcome Channel Set: ${ch}`);
+        await supabase.from("guild_config").upsert({ guild_id: guildId, welcome_channel: ch.id, welcome_enabled: true }, { onConflict: 'guild_id' });
+        return interaction.reply({ embeds: [createEmbed("✅ Channel Set", `Welcome messages will go to ${ch}`, SETTINGS.COLOR_SUCCESS)] });
     }
 
     if (sub === "message") {
         const title = interaction.options.getString("title");
         const desc = interaction.options.getString("description");
-        await supabase.from("guild_config").upsert({ guild_id: guildId, welcome_title: title, welcome_desc: desc });
+        await supabase.from("guild_config").upsert({ guild_id: guildId, welcome_title: title, welcome_desc: desc }, { onConflict: 'guild_id' });
         return interaction.reply({ embeds: [createEmbed("✅ Message Updated", `**Title:** ${title}\n**Desc:** ${desc}`, SETTINGS.COLOR_SUCCESS)] });
     }
 
     if (sub === "toggle") {
         const state = interaction.options.getString("state") === 'on';
-        await supabase.from("guild_config").upsert({ guild_id: guildId, welcome_enabled: state });
-        return interaction.reply(state ? "✅ Welcome Enabled" : "🚫 Welcome Disabled");
+        await supabase.from("guild_config").upsert({ guild_id: guildId, welcome_enabled: state }, { onConflict: 'guild_id' });
+        return interaction.reply({ embeds: [createEmbed("⚙️ Settings", `Welcome Message: **${state ? 'ENABLED' : 'DISABLED'}**`, state ? SETTINGS.COLOR_SUCCESS : SETTINGS.COLOR_WARN)] });
     }
 
     if (sub === "test") {
-        // Simulate Join
         await trackJoin(interaction.member);
-        return interaction.reply({ content: "✅ Test Message Sent", ephemeral: true });
+        return interaction.reply({ content: "✅ Test Sent", ephemeral: true });
     }
 }
 
-// 🔥 2. MERGED REWARDS COMMAND
+// 🔥 2. MERGED REWARDS SYSTEM
 async function handleRewards(interaction) {
     const sub = interaction.options.getSubcommand();
     
@@ -40,23 +39,23 @@ async function handleRewards(interaction) {
         const invites = interaction.options.getInteger("invites");
         const role = interaction.options.getRole("role");
         await supabase.from("invite_rewards").insert({ guild_id: interaction.guild.id, invites_required: invites, role_id: role.id });
-        return interaction.reply(`✅ Reward Added: **${invites} Invites** -> ${role}`);
+        return interaction.reply({ embeds: [createEmbed("✅ Reward Added", `**${invites} Invites** ➜ <@&${role.id}>`, SETTINGS.COLOR_SUCCESS)] });
     }
 
     if (sub === "remove") {
         const id = interaction.options.getInteger("id");
         await supabase.from("invite_rewards").delete().eq("id", id);
-        return interaction.reply("✅ Reward Removed");
+        return interaction.reply({ embeds: [createEmbed("🗑️ Reward Removed", `Reward ID: ${id} deleted.`, SETTINGS.COLOR_WARN)] });
     }
 
     if (sub === "list") {
         const { data } = await supabase.from("invite_rewards").select("*").eq("guild_id", interaction.guild.id).order("invites_required");
-        const list = data.map(r => `**ID: ${r.id}** • ${r.invites_required} Invites ➜ <@&${r.role_id}>`).join("\n");
-        return interaction.reply({ embeds: [createEmbed("🎁 Rewards List", list || "None", SETTINGS.COLOR_INFO)] });
+        const list = data.map(r => `**ID: ${r.id}** • **${r.invites_required}** Invites ➜ <@&${r.role_id}>`).join("\n") || "No rewards.";
+        return interaction.reply({ embeds: [createEmbed("🎁 Rewards List", list, SETTINGS.COLOR_INFO)] });
     }
 }
 
-// 🔥 3. TRACKER & SYNC
+// 🔥 3. SYNC & TRACKER
 async function trackJoin(member) {
     try {
         const { data: config } = await supabase.from("guild_config").select("*").eq("guild_id", member.guild.id).maybeSingle();
@@ -64,7 +63,7 @@ async function trackJoin(member) {
             const ch = member.guild.channels.cache.get(config.welcome_channel);
             if (ch) {
                 const title = config.welcome_title || "Welcome!";
-                const desc = (config.welcome_desc || "Welcome {user}").replace(/{user}/g, `<@${member.id}>`);
+                const desc = (config.welcome_desc || "Welcome {user} to {guild}!").replace(/{user}/g, `<@${member.id}>`).replace(/{guild}/g, member.guild.name);
                 ch.send({ embeds: [createEmbed(title, desc, SETTINGS.COLOR_SUCCESS, member.user)] });
             }
         }
@@ -77,7 +76,7 @@ async function showBatchSync(interaction) {
     const recordedIds = new Set(joins ? joins.map(j => j.user_id) : []);
     const missing = members.filter(m => !m.user.bot && !recordedIds.has(m.id)).first(5);
 
-    if (missing.length === 0) return interaction.editReply("✅ All Synced");
+    if (missing.length === 0) return interaction.editReply({ embeds: [createEmbed("✅ All Synced", "No missing data.", SETTINGS.COLOR_SUCCESS)] });
 
     const desc = missing.map((m, i) => `**${i+1}.** ${m} (${m.user.tag})`).join("\n");
     const components = missing.map((m, i) => new ActionRowBuilder().addComponents(
