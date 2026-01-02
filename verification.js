@@ -1,76 +1,97 @@
 const { SETTINGS, supabase, createEmbed, formatTime, parseDuration, logToWebhook } = require("./config");
 const { EmbedBuilder } = require("discord.js");
 
-// 🔥 1. MERGED WHITELIST COMMAND (Add/Remove/List)
+// 🔥 1. MERGED WHITELIST SYSTEM (FIXED)
 async function handleWhitelist(interaction) {
     const sub = interaction.options.getSubcommand();
     const guildId = interaction.guild.id;
-    
-    // Fetch current list
-    const { data } = await supabase.from("guild_config").select("ping_whitelist").eq("guild_id", guildId).single();
+
+    // Fetch current list (Ensure default is empty array)
+    const { data } = await supabase.from("guild_config").select("ping_whitelist").eq("guild_id", guildId).maybeSingle();
     let list = data?.ping_whitelist || [];
 
     if (sub === "add") {
         const user = interaction.options.getUser("user");
         const role = interaction.options.getRole("role");
-        
-        let added = "";
-        if(user && !list.includes(user.id)) { list.push(user.id); added += `<@${user.id}> `; }
-        if(role && !list.includes(role.id)) { list.push(role.id); added += `<@&${role.id}> `; }
-        
-        if(!added) return interaction.reply({ content: "❌ Already whitelisted or invalid.", ephemeral: true });
-        
-        await supabase.from("guild_config").upsert({ guild_id: guildId, ping_whitelist: list });
-        return interaction.reply({ embeds: [createEmbed("✅ Whitelist Updated", `Added: ${added}`, SETTINGS.COLOR_SUCCESS)] });
+        let added = [];
+
+        if (user && !list.includes(user.id)) { list.push(user.id); added.push(`<@${user.id}>`); }
+        if (role && !list.includes(role.id)) { list.push(role.id); added.push(`<@&${role.id}>`); }
+
+        if (added.length === 0) return interaction.reply({ embeds: [createEmbed("⚠️ Already Exists", "User/Role is already in whitelist.", SETTINGS.COLOR_WARN)], ephemeral: true });
+
+        // UPSERT is critical here
+        await supabase.from("guild_config").upsert({ guild_id: guildId, ping_whitelist: list }, { onConflict: 'guild_id' });
+        return interaction.reply({ embeds: [createEmbed("✅ Whitelist Updated", `**Added:** ${added.join(", ")}`, SETTINGS.COLOR_SUCCESS)] });
     }
 
     if (sub === "remove") {
         const user = interaction.options.getUser("user");
         const role = interaction.options.getRole("role");
-        
         const initialLen = list.length;
-        if(user) list = list.filter(id => id !== user.id);
-        if(role) list = list.filter(id => id !== role.id);
-        
-        if(list.length === initialLen) return interaction.reply({ content: "❌ Target not found in whitelist.", ephemeral: true });
 
-        await supabase.from("guild_config").upsert({ guild_id: guildId, ping_whitelist: list });
-        return interaction.reply({ embeds: [createEmbed("🗑️ Whitelist Removed", `Removed from whitelist.`, SETTINGS.COLOR_WARN)] });
+        if (user) list = list.filter(id => id !== user.id);
+        if (role) list = list.filter(id => id !== role.id);
+
+        if (list.length === initialLen) return interaction.reply({ embeds: [createEmbed("❌ Not Found", "Target not in whitelist.", SETTINGS.COLOR_ERROR)], ephemeral: true });
+
+        await supabase.from("guild_config").upsert({ guild_id: guildId, ping_whitelist: list }, { onConflict: 'guild_id' });
+        return interaction.reply({ embeds: [createEmbed("🗑️ Removed", "Successfully removed from whitelist.", SETTINGS.COLOR_WARN)] });
     }
 
     if (sub === "list") {
-        const formatted = list.map(id => `<@${id}> / <@&${id}>`).join("\n") || "No one whitelisted.";
-        return interaction.reply({ embeds: [createEmbed("🛡️ Anti-Ping Whitelist", formatted, SETTINGS.COLOR_INFO)] });
+        const desc = list.length > 0 ? list.map(id => `🛡️ <@${id}> / <@&${id}>`).join("\n") : "No one whitelisted.";
+        return interaction.reply({ embeds: [createEmbed("🛡️ Anti-Ping Whitelist", desc, SETTINGS.COLOR_INFO)] });
     }
 }
 
-// 🔥 2. CUSTOM CODE
-async function handleSetCode(interaction) {
-    const user = interaction.options.getUser("user");
-    const code = interaction.options.getString("code");
-    await supabase.from("verifications").upsert({ discord_id: user.id, code: code, verified: false }, { onConflict: 'discord_id' });
-    return interaction.reply({ embeds: [createEmbed("✅ Custom Code Set", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
+// 🔥 2. MERGED RULES SYSTEM
+async function handleRules(interaction) {
+    const sub = interaction.options.getSubcommand();
+    
+    if (sub === "set") {
+        const role = interaction.options.getRole("role");
+        const dur = interaction.options.getString("duration");
+        await supabase.from("role_rules").upsert({ role_id: role.id, role_name: role.name, duration: dur }, { onConflict: 'role_id' });
+        return interaction.reply({ embeds: [createEmbed("✅ Rule Set", `**Role:** <@&${role.id}>\n**Time:** \`${dur}\``, SETTINGS.COLOR_SUCCESS)] });
+    }
+    
+    if (sub === "remove") {
+        const role = interaction.options.getRole("role");
+        await supabase.from("role_rules").delete().eq("role_id", role.id);
+        return interaction.reply({ embeds: [createEmbed("🗑️ Rule Removed", `Deleted rule for <@&${role.id}>`, SETTINGS.COLOR_WARN)] });
+    }
+
+    if (sub === "list") {
+        const { data } = await supabase.from("role_rules").select("*");
+        const desc = data.map(r => `• <@&${r.role_id}> ➜ **${r.duration}**`).join("\n") || "No rules configured.";
+        return interaction.reply({ embeds: [createEmbed("📜 Verification Rules", desc, SETTINGS.COLOR_INFO)] });
+    }
 }
 
 // 🔥 3. ACTIVE USERS
 async function handleActiveUsers(interaction) {
-    // Basic logic for now (Pagination handled in index if needed, keeping simple here for stability)
+    // Show top 20 for simplicity in embed
     const { data, count } = await supabase.from("verifications").select("*", { count: 'exact' }).eq("verified", true).gt("expires_at", new Date().toISOString()).limit(20);
-    if (!data || data.length === 0) return interaction.reply("🔴 No active users.");
     
-    const list = data.map((u, i) => `\`${i+1}.\` <@${u.discord_id}> • \`${u.code}\``).join("\n");
-    return interaction.reply({ embeds: [createEmbed(`🟢 Active Users (${count})`, list, SETTINGS.COLOR_SUCCESS)] });
+    if (!data || data.length === 0) return interaction.reply({ embeds: [createEmbed("🔴 Active Users", "No active keys found.", SETTINGS.COLOR_ERROR)] });
+
+    const list = data.map((u, i) => {
+        const user = u.discord_id ? `<@${u.discord_id}>` : "`Unknown`";
+        const timeLeft = formatTime(new Date(u.expires_at).getTime() - Date.now());
+        return `\`${i+1}.\` ${user} • ⏳ ${timeLeft}`;
+    }).join("\n");
+
+    return interaction.reply({ embeds: [createEmbed(`🟢 Active Sessions (${count})`, list, SETTINGS.COLOR_SUCCESS)] });
 }
 
-// 🔥 4. VERIFICATION LOGIC
+// 🔥 4. VERIFICATION CORE
 async function processVerification(user, code, guild, replyCallback) {
-    if (SETTINGS.MAINTENANCE) return replyCallback({ content: "🚧 Maintenance", ephemeral: true });
-
     // Link Check
     const { data: link } = await supabase.from("roblox_links").select("*").eq("discord_id", user.id).maybeSingle();
-    if (!link) return replyCallback({ embeds: [createEmbed("⚠️ Link Required", "First link your Roblox ID.\nUse `/getid` then `/linkroblox`.", SETTINGS.COLOR_WARN)] });
+    if (!link) return replyCallback({ embeds: [createEmbed("⚠️ Action Required", "Link Roblox First: `/linkroblox`", SETTINGS.COLOR_WARN)] });
 
-    // Poll Punishment Logic
+    // Poll Check
     let isPollPunished = false;
     if (SETTINGS.POLL_LOCK) {
         const { data: activePoll } = await supabase.from("polls").select("id").eq("is_active", true).limit(1).maybeSingle();
@@ -80,14 +101,15 @@ async function processVerification(user, code, guild, replyCallback) {
         }
     }
 
+    // Code Check
     const { data: userData } = await supabase.from("verifications").select("*").eq("code", code).limit(1).maybeSingle();
-    if (!userData) return replyCallback({ embeds: [createEmbed("❌ Invalid Code", "Check code in game.", SETTINGS.COLOR_ERROR)] });
+    if (!userData) return replyCallback({ embeds: [createEmbed("❌ Invalid Code", "Get key from game.", SETTINGS.COLOR_ERROR)] });
     if (userData.is_banned) return replyCallback({ embeds: [createEmbed("🚫 BANNED", "Permanently banned.", SETTINGS.COLOR_ERROR)] });
 
+    // Time Calc
     let duration = isPollPunished ? SETTINGS.DEFAULT_PUNISH_MS : SETTINGS.DEFAULT_VERIFY_MS;
     let ruleName = isPollPunished ? "⚠️ Poll Penalty" : "Default";
 
-    // Boost Logic (Simplified for stability)
     if (!isPollPunished) {
         try {
             const member = await guild.members.fetch(user.id);
@@ -104,7 +126,31 @@ async function processVerification(user, code, guild, replyCallback) {
     const expiry = duration === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + duration).toISOString();
     await supabase.from("verifications").update({ verified: true, expires_at: expiry, discord_id: user.id }).eq("id", userData.id);
 
-    return replyCallback({ embeds: [createEmbed(isPollPunished?"⚠️ Verified (Restricted)":"✅ Verified", `**Time:** ${formatTime(duration)}\n**Logic:** ${ruleName}`, isPollPunished?SETTINGS.COLOR_WARN:SETTINGS.COLOR_SUCCESS, user)] });
+    return replyCallback({ embeds: [createEmbed(isPollPunished?"⚠️ Verified (Restricted)":"✅ Verification Successful", `**Time:** ${formatTime(duration)}\n**Logic:** ${ruleName}`, isPollPunished?SETTINGS.COLOR_WARN:SETTINGS.COLOR_SUCCESS, user)] });
 }
 
-module.exports = { processVerification, handleWhitelist, handleSetCode, handleActiveUsers };
+// Helpers for other commands
+async function handleGetRobloxId(interaction) {
+    const name = interaction.options.getString("username");
+    try {
+        const res = await fetch(SETTINGS.ROBLOX_API, { method: 'POST', headers: {'Content-Type': 'json'}, body: JSON.stringify({ usernames: [name], excludeBannedUsers: true }) });
+        const json = await res.json();
+        if(json.data?.length) return interaction.reply({ embeds: [createEmbed("✅ ID Found", `ID: \`${json.data[0].id}\``, SETTINGS.COLOR_SUCCESS)] });
+        return interaction.reply({ content: "❌ Not found", ephemeral: true });
+    } catch(e) { return interaction.reply({ content: "❌ Error", ephemeral: true }); }
+}
+
+async function handleLinkRoblox(interaction) {
+    const id = interaction.options.getString("roblox_id");
+    await supabase.from("roblox_links").upsert({ discord_id: interaction.user.id, roblox_id: id });
+    return interaction.reply({ embeds: [createEmbed("✅ Linked", `ID: \`${id}\``, SETTINGS.COLOR_SUCCESS)] });
+}
+
+async function handleSetCode(interaction) {
+    const user = interaction.options.getUser("user");
+    const code = interaction.options.getString("code");
+    await supabase.from("verifications").upsert({ discord_id: user.id, code: code, verified: false }, { onConflict: 'discord_id' });
+    return interaction.reply({ embeds: [createEmbed("✅ Custom Code", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
+}
+
+module.exports = { processVerification, handleWhitelist, handleRules, handleActiveUsers, handleGetRobloxId, handleLinkRoblox, handleSetCode };
