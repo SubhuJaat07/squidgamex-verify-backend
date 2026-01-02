@@ -1,7 +1,7 @@
 const { ActionRowBuilder, UserSelectMenuBuilder, EmbedBuilder } = require("discord.js");
 const { supabase, createEmbed } = require("./config");
 
-// 🔥 BATCH SYNC DASHBOARD
+// 🔥 BATCH SYNC: Show 5 at once
 async function showBatchSync(interaction) {
     const guild = interaction.guild;
     await guild.members.fetch(); 
@@ -9,7 +9,7 @@ async function showBatchSync(interaction) {
     const { data: joins } = await supabase.from("joins").select("user_id").eq("guild_id", guild.id);
     const recordedIds = new Set(joins ? joins.map(j => j.user_id) : []);
     
-    // Filter Missing
+    // Filter top 5 missing
     const missingBatch = members.filter(m => !m.user.bot && !recordedIds.has(m.id)).first(5);
 
     if (missingBatch.length === 0) {
@@ -32,13 +32,13 @@ async function showBatchSync(interaction) {
     else await interaction.editReply(payload);
 }
 
-// 🔥 HANDLE SAVE
+// 🔥 HANDLE SELECTION
 async function handleBatchSync(interaction) {
     try { await interaction.deferUpdate(); } catch(e){}
     const targetUserId = interaction.customId.replace("sync_fix_", "");
     const inviterId = interaction.values[0];
 
-    // DB Write - Wait for it!
+    // DB Write
     await supabase.from("joins").upsert({ guild_id: interaction.guild.id, user_id: targetUserId, inviter_id: inviterId, code: "manual_sync" });
 
     // Update Stats
@@ -59,19 +59,19 @@ async function handleBatchSync(interaction) {
 async function trackJoin(member) {
     try {
         const guild = member.guild;
-        // Basic Logic (Assumes unknown if tracker cache logic isn't here to keep file small)
-        await supabase.from("joins").insert({ guild_id: guild.id, user_id: member.id, inviter_id: 'unknown', code: 'auto' });
+        const inviterId = 'unknown'; // Simplified tracker
+        await supabase.from("joins").insert({ guild_id: guild.id, user_id: member.id, inviter_id: inviterId, code: 'auto' });
 
         const { data: config } = await supabase.from("guild_config").select("*").eq("guild_id", guild.id).maybeSingle();
         if (config && config.welcome_channel) {
-            const channel = guild.channels.cache.get(config.welcome_channel);
-            if (channel) {
+            const ch = guild.channels.cache.get(config.welcome_channel);
+            if (ch) {
                 const embed = new EmbedBuilder()
                     .setTitle(config.welcome_title || "Welcome!")
                     .setDescription((config.welcome_desc || "Welcome {user}").replace(/{user}/g, `<@${member.id}>`))
                     .setColor(0x00FF00)
                     .setThumbnail(member.user.displayAvatarURL());
-                channel.send({ embeds: [embed] });
+                ch.send({ embeds: [embed] });
             }
         }
     } catch(e) {}
