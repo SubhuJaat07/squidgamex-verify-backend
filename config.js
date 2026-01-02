@@ -14,13 +14,13 @@ const SETTINGS = {
     ROBLOX_API: "https://users.roblox.com/v1/usernames/users",
     
     FOOTER_ICON: "https://i.imgur.com/AfFp7pu.png",
-    FOOTER_TEXT: "Squid Game X • Developed By Subhu Jaat",
+    FOOTER_TEXT: "Squid Game X • Security System",
     
-    // Colors
-    COLOR_SUCCESS: 0x00FF00,
-    COLOR_ERROR: 0xFF0000,
-    COLOR_INFO: 0x0099FF,
-    COLOR_WARN: 0xFFA500,
+    // Theme Colors
+    COLOR_SUCCESS: 0x00FF00, // Green
+    COLOR_ERROR: 0xFF0000,   // Red
+    COLOR_INFO: 0x0099FF,    // Blue
+    COLOR_WARN: 0xFFA500,    // Orange
     
     MAINTENANCE: false
 };
@@ -28,6 +28,7 @@ const SETTINGS = {
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const webhook = new WebhookClient({ url: SETTINGS.LOG_WEBHOOK_URL });
 
+// --- 🎨 ULTRA PRO EMBED BUILDER ---
 function createEmbed(title, description, color = SETTINGS.COLOR_INFO, user = null) {
     const embed = new EmbedBuilder()
         .setTitle(title)
@@ -35,10 +36,20 @@ function createEmbed(title, description, color = SETTINGS.COLOR_INFO, user = nul
         .setColor(color)
         .setFooter({ text: SETTINGS.FOOTER_TEXT, iconURL: SETTINGS.FOOTER_ICON })
         .setTimestamp();
+    
     if (user) embed.setThumbnail(user.displayAvatarURL({ dynamic: true }));
     return embed;
 }
 
+// --- LOGGING ---
+async function logToWebhook(title, desc, color = SETTINGS.COLOR_WARN) {
+    try {
+        const embed = new EmbedBuilder().setTitle(title).setDescription(desc).setColor(color).setTimestamp();
+        await webhook.send({ embeds: [embed] });
+    } catch(e) {}
+}
+
+// --- TIME UTILS ---
 function parseDuration(str) {
     if (!str) return 0;
     if (str.toLowerCase() === "lifetime") return "LIFETIME";
@@ -49,6 +60,7 @@ function parseDuration(str) {
     if (unit === 'm') return val * 60 * 1000;
     if (unit === 'h') return val * 60 * 60 * 1000;
     if (unit === 'd') return val * 24 * 60 * 60 * 1000;
+    if (unit === 'w') return val * 7 * 24 * 60 * 60 * 1000;
     return 0;
 }
 
@@ -59,17 +71,14 @@ function formatTime(ms) {
     const d = Math.floor(s / 86400);
     const h = Math.floor((s % 86400) / 3600);
     const m = Math.floor((s % 3600) / 60);
-    return `${d}d ${h}h ${m}m`;
+    let p = []; if(d>0) p.push(`${d}d`); if(h>0) p.push(`${h}h`); if(m>0) p.push(`${m}m`);
+    return p.join(' ') || "0m";
 }
 
 async function isAdmin(userId) {
     if (userId === SETTINGS.SUPER_OWNER_ID) return true;
     const { data } = await supabase.from("bot_admins").select("*").eq("discord_id", userId).maybeSingle();
     return !!data;
-}
-
-async function logToWebhook(title, desc, color) {
-    try { await webhook.send({ embeds: [new EmbedBuilder().setTitle(title).setDescription(desc).setColor(color).setTimestamp()] }); } catch(e){}
 }
 
 module.exports = { SETTINGS, supabase, createEmbed, parseDuration, formatTime, isAdmin, logToWebhook };
