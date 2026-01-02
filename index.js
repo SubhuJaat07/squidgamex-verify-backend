@@ -1,9 +1,9 @@
 const express = require("express");
 const cors = require("cors");
 const { Client, GatewayIntentBits, Partials, Routes, REST, SlashCommandBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
-const { SETTINGS, supabase, isAdmin, createEmbed, parseDuration } = require("./config");
-const { processVerification, handleWhitelist, handleRules, handleActiveUsers, handleGetRobloxId, handleLinkRoblox, handleSetCode } = require("./verification");
-const { handleWelcome, handleRewards, trackJoin, showBatchSync, handleBatchSync } = require("./invite");
+const { SETTINGS, supabase, isAdmin, createEmbed, parseDuration, logToWebhook } = require("./config");
+const { processVerification, handleWhitelist, handleRules, handleActiveUsers, handleGetRobloxId, handleLinkRoblox, handleSetCode, handleSetExpiry, handleCheckAlts, handleLookup, handleBanSystem } = require("./verification");
+const { handleWelcome, handleRewards, trackJoin, showBatchSync, handleBatchSync, handleLeaderboard, handleWhoInvited } = require("./invite");
 
 const app = express();
 app.use(cors());
@@ -24,7 +24,7 @@ app.listen(SETTINGS.PORT, () => console.log(`🚀 Port: ${SETTINGS.PORT}`));
 
 const client = new Client({ intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites ], partials: [Partials.GuildMember, Partials.Channel] });
 
-// 🔥 COMMAND REGISTRY (MERGED & FIXED)
+// 🔥 ALL COMMANDS (CHECKED & FIXED)
 const commands = [
     // 1. WHITELIST
     new SlashCommandBuilder().setName("whitelist").setDescription("Manage Anti-Ping")
@@ -51,17 +51,31 @@ const commands = [
         .addSubcommand(s=>s.setName("remove").setDescription("Remove Rule").addRoleOption(o=>o.setName("role").setDescription("Role").setRequired(true)))
         .addSubcommand(s=>s.setName("list").setDescription("List Rules")),
 
-    // 5. POLLS
+    // 5. BAN SYSTEM
+    new SlashCommandBuilder().setName("bansystem").setDescription("Ban Manage")
+        .addSubcommand(s=>s.setName("ban").setDescription("Ban").addStringOption(o=>o.setName("target").setDescription("Code/HWID").setRequired(true)))
+        .addSubcommand(s=>s.setName("unban").setDescription("Unban").addStringOption(o=>o.setName("target").setDescription("Code/HWID").setRequired(true)))
+        .addSubcommand(s=>s.setName("list").setDescription("List")),
+
+    // 6. POLLS
     new SlashCommandBuilder().setName("poll").setDescription("Create Poll").addStringOption(o=>o.setName("q").setDescription("Question").setRequired(true)).addStringOption(o=>o.setName("o1").setDescription("Opt1").setRequired(true)).addStringOption(o=>o.setName("o2").setDescription("Opt2").setRequired(true)).addBooleanOption(o=>o.setName("multi").setDescription("Multi")),
     new SlashCommandBuilder().setName("endpoll").setDescription("End Poll").addIntegerOption(o=>o.setName("id").setDescription("Poll ID").setRequired(true)),
 
-    // 6. OTHERS
+    // 7. OTHERS
     new SlashCommandBuilder().setName("verify").setDescription("Verify Key").addStringOption(o=>o.setName("code").setDescription("Code").setRequired(true)),
     new SlashCommandBuilder().setName("activeusers").setDescription("Active Keys"),
     new SlashCommandBuilder().setName("syncmissing").setDescription("Sync DB"),
     new SlashCommandBuilder().setName("getid").setDescription("Get Roblox ID").addStringOption(o=>o.setName("username").setDescription("User").setRequired(true)),
     new SlashCommandBuilder().setName("linkroblox").setDescription("Link ID").addStringOption(o=>o.setName("roblox_id").setDescription("ID").setRequired(true)),
-    new SlashCommandBuilder().setName("setcode").setDescription("Custom Code").addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("code").setDescription("Code").setRequired(true))
+    new SlashCommandBuilder().setName("setcode").setDescription("Custom Code").addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("code").setDescription("Code").setRequired(true)),
+    new SlashCommandBuilder().setName("leaderboard").setDescription("Invite Leaderboard"),
+    new SlashCommandBuilder().setName("whoinvited").setDescription("Check Inviter").addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)),
+    new SlashCommandBuilder().setName("setexpiry").setDescription("Set Time").addStringOption(o=>o.setName("target").setDescription("Target").setRequired(true)).addStringOption(o=>o.setName("duration").setDescription("Time").setRequired(true)).addStringOption(o=>o.setName("note").setDescription("Note")),
+    new SlashCommandBuilder().setName("lookup").setDescription("Lookup User").addStringOption(o=>o.setName("target").setDescription("Target").setRequired(true)),
+    new SlashCommandBuilder().setName("checkalts").setDescription("Check Alts"),
+    
+    // Config
+    new SlashCommandBuilder().setName("config").setDescription("Config").addSubcommand(s=>s.setName("pingpunish").setDescription("Ping Penalty").addStringOption(o=>o.setName("type").setDescription("role/timeout").setRequired(true).addChoices({name:'Role',value:'role'},{name:'Timeout',value:'timeout'})).addStringOption(o=>o.setName("value").setDescription("RoleID/Duration").setRequired(true)))
 
 ].map(c => c.toJSON());
 
@@ -87,10 +101,17 @@ client.on("interactionCreate", async interaction => {
 
         if(!interaction.isChatInputCommand()) return;
 
+        // Routing
         if(interaction.commandName === "whitelist") await handleWhitelist(interaction);
         else if(interaction.commandName === "welcome") await handleWelcome(interaction);
         else if(interaction.commandName === "rewards") await handleRewards(interaction);
         else if(interaction.commandName === "rules") await handleRules(interaction);
+        else if(interaction.commandName === "bansystem") await handleBanSystem(interaction);
+        else if(interaction.commandName === "leaderboard") await handleLeaderboard(interaction);
+        else if(interaction.commandName === "whoinvited") await handleWhoInvited(interaction);
+        else if(interaction.commandName === "setexpiry") await handleSetExpiry(interaction);
+        else if(interaction.commandName === "lookup") await handleLookup(interaction);
+        else if(interaction.commandName === "checkalts") await handleCheckAlts(interaction);
         else if(interaction.commandName === "verify") { await interaction.deferReply(); await processVerification(interaction.user, interaction.options.getString("code"), interaction.guild, (o)=>interaction.editReply(o)); }
         else if(interaction.commandName === "activeusers") await handleActiveUsers(interaction);
         else if(interaction.commandName === "syncmissing") { await interaction.deferReply({ephemeral:true}); await showBatchSync(interaction); }
@@ -111,23 +132,15 @@ client.on("interactionCreate", async interaction => {
             await supabase.from("polls").update({is_active:false}).eq("id", id);
             interaction.reply(`🛑 Poll #${id} Ended`);
         }
+        else if(interaction.commandName === "config") {
+            const type = interaction.options.getString("type");
+            const val = interaction.options.getString("value");
+            if(type==='role') await supabase.from("guild_config").upsert({guild_id:interaction.guild.id, ping_punish_role:val});
+            else await supabase.from("guild_config").upsert({guild_id:interaction.guild.id, ping_timeout_ms:parseDuration(val)});
+            interaction.reply("✅ Config Updated");
+        }
 
     } catch(e) { console.error(e); }
-});
-
-// ANTI-PING
-client.on("messageCreate", async (message) => {
-    if (message.author.bot) return;
-    if (message.mentions.users.has(SETTINGS.SUPER_OWNER_ID) && message.author.id !== SETTINGS.SUPER_OWNER_ID) {
-        const { data } = await supabase.from("guild_config").select("ping_whitelist").eq("guild_id", message.guild.id).maybeSingle();
-        const list = data?.ping_whitelist || [];
-        if(list.includes(message.author.id) || message.member.roles.cache.some(r=>list.includes(r.id))) return;
-        
-        if (message.member.moderatable) {
-            await message.member.timeout(SETTINGS.DEFAULT_PUNISH_MS, "Anti-Ping");
-            message.reply({embeds:[createEmbed("⚠️ Warning", "Do not ping the owner!", SETTINGS.COLOR_ERROR)]}).then(m=>setTimeout(()=>m.delete(),5000));
-        }
-    }
 });
 
 client.login(process.env.DISCORD_BOT_TOKEN);
