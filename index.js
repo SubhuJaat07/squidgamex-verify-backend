@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { Client, GatewayIntentBits, Partials, Routes, REST, SlashCommandBuilder, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, Routes, REST, SlashCommandBuilder, PermissionsBitField, EmbedBuilder } = require("discord.js");
 const { SETTINGS, supabase, isAdmin, createEmbed, parseDuration, logToWebhook } = require("./config");
 const { processVerification, handleGetRobloxId, handleLinkRoblox, handleActiveUsers, handleSetCode, handleBanSystem, handleRules, handleLookup, handleSetExpiry, handleCheckAlts } = require("./verification");
 const { handleWhitelist, handleWelcome, handleRewards, trackJoin, showBatchSync, handleBatchSync, handleLeaderboard } = require("./invite");
@@ -9,7 +9,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// API
 app.get("/", (req, res) => res.send("System Online 🟢"));
 app.get("/check", async (req, res) => {
     if (SETTINGS.MAINTENANCE) return res.json({ status: "ERROR", message: "Maintenance" });
@@ -33,32 +32,30 @@ const client = new Client({ intents: [ GatewayIntentBits.Guilds, GatewayIntentBi
 
 // 🔥 COMMANDS REGISTRATION
 const commands = [
-    // 1. ADMIN TOOLS (New)
+    // 1. PUBLIC COMMANDS
+    new SlashCommandBuilder().setName("verify").setDescription("Verify Script").addStringOption(o=>o.setName("code").setDescription("Code").setRequired(true)),
+    new SlashCommandBuilder().setName("getid").setDescription("Get Roblox ID").addStringOption(o=>o.setName("username").setDescription("Username").setRequired(true)),
+    new SlashCommandBuilder().setName("linkroblox").setDescription("Link ID").addStringOption(o=>o.setName("roblox_id").setDescription("ID").setRequired(true)),
+    new SlashCommandBuilder().setName("leaderboard").setDescription("Invite Leaderboard"),
+
+    // 2. ADMIN TOOLS (RESTORED)
     new SlashCommandBuilder().setName("admin").setDescription("Admin Tools")
         .addSubcommand(s => s.setName("say").setDescription("Bot Speaks").addStringOption(o=>o.setName("message").setDescription("Text").setRequired(true)).addChannelOption(o=>o.setName("channel").setDescription("Channel")))
         .addSubcommand(s => s.setName("announce").setDescription("Send Embed").addStringOption(o=>o.setName("title").setDescription("Title").setRequired(true)).addStringOption(o=>o.setName("message").setDescription("Desc").setRequired(true)).addChannelOption(o=>o.setName("channel").setDescription("Channel")).addStringOption(o=>o.setName("image").setDescription("Image URL")))
         .addSubcommand(s => s.setName("dm").setDescription("DM User").addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("message").setDescription("Message").setRequired(true))),
 
-    // 2. WHITELIST
+    // 3. SECURITY & CONFIG (ADMIN ONLY)
     new SlashCommandBuilder().setName("whitelist").setDescription("Anti-Ping Whitelist")
         .addStringOption(o => o.setName("action").setDescription("Action").setRequired(true).addChoices({name:'Add',value:'add'}, {name:'Remove',value:'remove'}, {name:'List',value:'list'}))
         .addUserOption(o => o.setName("user").setDescription("User"))
         .addRoleOption(o => o.setName("role").setDescription("Role")),
 
-    // 3. WELCOME
-    new SlashCommandBuilder().setName("welcome").setDescription("Welcome Settings")
+    new SlashCommandBuilder().setName("welcome").setDescription("Welcome System")
         .addSubcommand(s => s.setName("channel").setDescription("Set Channel").addChannelOption(o=>o.setName("target").setDescription("Channel").setRequired(true)))
-        .addSubcommand(s => s.setName("message").setDescription("Set Message").addStringOption(o=>o.setName("title").setDescription("Title").setRequired(true)).addStringOption(o=>o.setName("description").setDescription("Desc").setRequired(true)))
+        .addSubcommand(s => s.setName("message").setDescription("Set Message").addStringOption(o=>o.setName("title").setDescription("Title").setRequired(true)).addStringOption(o=>o.setName("description").setDescription("Use {user}, {count}, {inviter}").setRequired(true)))
         .addSubcommand(s => s.setName("toggle").setDescription("On/Off").addStringOption(o=>o.setName("state").setDescription("State").setRequired(true).addChoices({name:'On',value:'on'},{name:'Off',value:'off'})))
         .addSubcommand(s => s.setName("test").setDescription("Test Message")),
 
-    // 4. REWARDS
-    new SlashCommandBuilder().setName("rewards").setDescription("Invite Rewards")
-        .addSubcommand(s => s.setName("add").setDescription("Add").addIntegerOption(o=>o.setName("invites").setDescription("Count").setRequired(true)).addRoleOption(o=>o.setName("role").setDescription("Role").setRequired(true)))
-        .addSubcommand(s => s.setName("remove").setDescription("Remove").addIntegerOption(o=>o.setName("id").setDescription("ID").setRequired(true)))
-        .addSubcommand(s => s.setName("list").setDescription("List")),
-
-    // 5. POLLS
     new SlashCommandBuilder().setName("poll").setDescription("Create Poll")
         .addStringOption(o => o.setName("q").setDescription("Question").setRequired(true))
         .addStringOption(o => o.setName("o1").setDescription("Option 1").setRequired(true))
@@ -66,35 +63,28 @@ const commands = [
         .addStringOption(o => o.setName("o3").setDescription("Option 3"))
         .addStringOption(o => o.setName("o4").setDescription("Option 4"))
         .addStringOption(o => o.setName("o5").setDescription("Option 5"))
-        .addRoleOption(o => o.setName("punish_role").setDescription("Punishment Role"))
-        .addBooleanOption(o => o.setName("multiple").setDescription("Multi Vote")),
+        .addRoleOption(o => o.setName("punish_role").setDescription("Role for non-voters"))
+        .addBooleanOption(o => o.setName("multiple").setDescription("Allow Multi Vote")),
+    
     new SlashCommandBuilder().setName("endpoll").setDescription("End Poll").addIntegerOption(o => o.setName("id").setDescription("Poll ID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Punish Time (e.g. 2d)")),
     new SlashCommandBuilder().setName("pollresults").setDescription("Results").addIntegerOption(o => o.setName("pollid").setDescription("ID")),
 
-    // 6. VERIFICATION & SECURITY
-    new SlashCommandBuilder().setName("verify").setDescription("Verify").addStringOption(o=>o.setName("code").setDescription("Code").setRequired(true)),
+    new SlashCommandBuilder().setName("rewards").setDescription("Invite Rewards")
+        .addSubcommand(s => s.setName("add").setDescription("Add").addIntegerOption(o=>o.setName("invites").setDescription("Count").setRequired(true)).addRoleOption(o=>o.setName("role").setDescription("Role").setRequired(true)))
+        .addSubcommand(s => s.setName("remove").setDescription("Remove").addIntegerOption(o=>o.setName("id").setDescription("ID").setRequired(true)))
+        .addSubcommand(s => s.setName("list").setDescription("List")),
+
+    new SlashCommandBuilder().setName("bansystem").setDescription("Ban System").addSubcommand(s=>s.setName("ban").setDescription("Ban").addStringOption(o=>o.setName("target").setRequired(true).setDescription("Target"))).addSubcommand(s=>s.setName("unban").setDescription("Unban").addStringOption(o=>o.setName("target").setRequired(true).setDescription("Target"))).addSubcommand(s=>s.setName("list").setDescription("List")),
+    new SlashCommandBuilder().setName("rules").setDescription("Rule System").addSubcommand(s=>s.setName("set").setDescription("Set").addRoleOption(o=>o.setName("role").setRequired(true).setDescription("Role")).addStringOption(o=>o.setName("duration").setRequired(true).setDescription("Time"))).addSubcommand(s=>s.setName("remove").setDescription("Remove").addRoleOption(o=>o.setName("role").setRequired(true).setDescription("Role"))).addSubcommand(s=>s.setName("list").setDescription("List")),
+    
     new SlashCommandBuilder().setName("setcode").setDescription("Set Custom Code").addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)).addStringOption(o=>o.setName("code").setDescription("Code").setRequired(true)),
-    new SlashCommandBuilder().setName("syncmissing").setDescription("Sync Invites"),
     new SlashCommandBuilder().setName("activeusers").setDescription("Active Keys"),
-    new SlashCommandBuilder().setName("getid").setDescription("Get Roblox ID").addStringOption(o=>o.setName("username").setDescription("Name").setRequired(true)),
-    new SlashCommandBuilder().setName("linkroblox").setDescription("Link ID").addStringOption(o=>o.setName("roblox_id").setDescription("ID").setRequired(true)),
-    new SlashCommandBuilder().setName("lookup").setDescription("Lookup").addStringOption(o=>o.setName("target").setDescription("Code/HWID").setRequired(true)),
     new SlashCommandBuilder().setName("checkalts").setDescription("Check Alts"),
-    new SlashCommandBuilder().setName("leaderboard").setDescription("Leaderboard"),
+    new SlashCommandBuilder().setName("syncmissing").setDescription("Sync Invites"),
+    new SlashCommandBuilder().setName("lookup").setDescription("Lookup").addStringOption(o=>o.setName("target").setDescription("Code/HWID").setRequired(true)),
     new SlashCommandBuilder().setName("setexpiry").setDescription("Set Expiry").addStringOption(o=>o.setName("target").setDescription("Target").setRequired(true)).addStringOption(o=>o.setName("duration").setDescription("Time").setRequired(true)).addStringOption(o=>o.setName("note").setDescription("Note")),
-
-    new SlashCommandBuilder().setName("bansystem").setDescription("Ban System")
-        .addSubcommand(s=>s.setName("ban").setDescription("Ban").addStringOption(o=>o.setName("target").setDescription("Target").setRequired(true)))
-        .addSubcommand(s=>s.setName("unban").setDescription("Unban").addStringOption(o=>o.setName("target").setDescription("Target").setRequired(true)))
-        .addSubcommand(s=>s.setName("list").setDescription("List")),
-
-    new SlashCommandBuilder().setName("rules").setDescription("Rule System")
-        .addSubcommand(s=>s.setName("set").setDescription("Set").addRoleOption(o=>o.setName("role").setDescription("Role").setRequired(true)).addStringOption(o=>o.setName("duration").setDescription("Time").setRequired(true)))
-        .addSubcommand(s=>s.setName("remove").setDescription("Remove").addRoleOption(o=>o.setName("role").setDescription("Role").setRequired(true)))
-        .addSubcommand(s=>s.setName("list").setDescription("List")),
-
-    new SlashCommandBuilder().setName("config").setDescription("Config")
-        .addSubcommand(s=>s.setName("pingpunish").setDescription("Anti-Ping").addStringOption(o=>o.setName("type").setDescription("role/timeout").setRequired(true).addChoices({name:'Role',value:'role'},{name:'Timeout',value:'timeout'})).addStringOption(o=>o.setName("value").setDescription("Value").setRequired(true)))
+    
+    new SlashCommandBuilder().setName("config").setDescription("Config").addSubcommand(s=>s.setName("pingpunish").setDescription("Anti-Ping").addStringOption(o=>o.setName("type").setDescription("role/timeout").setRequired(true).addChoices({name:'Role',value:'role'},{name:'Timeout',value:'timeout'})).addStringOption(o=>o.setName("value").setDescription("Value").setRequired(true)))
 
 ].map(c => c.toJSON());
 
@@ -104,10 +94,11 @@ client.once("ready", async () => {
 });
 
 client.on("interactionCreate", async interaction => {
+    // 1. Handle Buttons/Menus
     if(interaction.customId?.startsWith("sync_")) { await handleBatchSync(interaction); return; }
     if(interaction.customId?.startsWith("active_")) { const p = parseInt(interaction.customId.split('_')[2]); await handleActiveUsers(interaction, p); return; }
     
-    // POLL VOTE
+    // Poll Vote Button
     if(interaction.isButton() && interaction.customId.startsWith('vote_')) {
         const [_, pid, ch] = interaction.customId.split('_');
         const pollId = parseInt(pid);
@@ -123,17 +114,17 @@ client.on("interactionCreate", async interaction => {
     }
 
     if(!interaction.isChatInputCommand()) return;
-    
-    // PUBLIC COMMANDS
+
+    // 2. PUBLIC COMMANDS (No Admin Check)
     if(interaction.commandName === "verify") { await interaction.deferReply(); await processVerification(interaction.user, interaction.options.getString("code"), interaction.guild, (o)=>interaction.editReply(o)); return; }
     if(interaction.commandName === "getid") { await handleGetRobloxId(interaction); return; }
     if(interaction.commandName === "linkroblox") { await handleLinkRoblox(interaction); return; }
     if(interaction.commandName === "leaderboard") { await handleLeaderboard(interaction); return; }
 
-    // 🔥 ADMIN ONLY CHECK FOR ALL OTHER COMMANDS
+    // 3. 🛡️ ADMIN CHECK FOR EVERYTHING ELSE
     if (!await isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ **Access Denied:** Admin only.", ephemeral: true });
 
-    // ROUTING (Protected)
+    // 4. ADMIN ROUTING
     if(interaction.commandName === "whitelist") await handleWhitelist(interaction);
     else if(interaction.commandName === "welcome") await handleWelcome(interaction);
     else if(interaction.commandName === "rewards") await handleRewards(interaction);
@@ -146,10 +137,11 @@ client.on("interactionCreate", async interaction => {
     else if(interaction.commandName === "setexpiry") await handleSetExpiry(interaction);
     else if(interaction.commandName === "checkalts") await handleCheckAlts(interaction);
     
-    // ADMIN TOOLS
+    // ADMIN TOOLS (Restored)
     else if(interaction.commandName === "admin") {
         const sub = interaction.options.getSubcommand();
         const ch = interaction.options.getChannel("channel") || interaction.channel;
+        
         if(sub === "say") {
             await ch.send(interaction.options.getString("message"));
             interaction.reply({content:"✅ Sent", ephemeral:true});
@@ -162,7 +154,10 @@ client.on("interactionCreate", async interaction => {
         }
         if(sub === "dm") {
             const u = interaction.options.getUser("user");
-            try { await u.send(interaction.options.getString("message")); interaction.reply("✅ DM Sent"); } catch(e) { interaction.reply("❌ DM Failed"); }
+            try { 
+                await u.send(interaction.options.getString("message")); 
+                interaction.reply({content:`✅ DM Sent to ${u.tag}`, ephemeral:true}); 
+            } catch(e) { interaction.reply({content:"❌ DM Failed (User has DMs off)", ephemeral:true}); }
         }
     }
 
@@ -214,6 +209,7 @@ client.on("interactionCreate", async interaction => {
         });
         return interaction.editReply({ embeds: [createEmbed(`📊 Results #${pid}`, desc, SETTINGS.COLOR_INFO)] });
     }
+    // CONFIG
     else if(interaction.commandName === "config") {
         const type = interaction.options.getString("type");
         const val = interaction.options.getString("value");
@@ -223,6 +219,7 @@ client.on("interactionCreate", async interaction => {
     }
 });
 
+// ANTI-PING & TEXT VERIFY
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
     if (message.mentions.users.has(SETTINGS.SUPER_OWNER_ID) && message.author.id !== SETTINGS.SUPER_OWNER_ID && !message.reference) {
