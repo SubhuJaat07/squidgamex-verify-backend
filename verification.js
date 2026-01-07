@@ -1,7 +1,7 @@
 const { SETTINGS, supabase, createEmbed, formatTime, parseDuration, logToWebhook } = require("./config");
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
-// ... (GetID, LinkRoblox remain same as before) ...
+// 🔥 1. ROBLOX UTILS
 async function handleGetRobloxId(interaction) {
     const username = interaction.options.getString("username");
     try {
@@ -10,9 +10,9 @@ async function handleGetRobloxId(interaction) {
             body: JSON.stringify({ usernames: [username], excludeBannedUsers: true })
         });
         const json = await response.json();
-        if (json.data && json.data.length > 0) {
+        if (json.data?.length > 0) {
             const rUser = json.data[0];
-            return interaction.reply({ embeds: [createEmbed("✅ Roblox ID Found", `**User:** ${rUser.name}\n**ID:** \`${rUser.id}\`\n\n👇 **Copy:**\n\`/linkroblox roblox_id:${rUser.id}\``, SETTINGS.COLOR_SUCCESS)] });
+            return interaction.reply({ embeds: [createEmbed("✅ Roblox ID Found", `**User:** ${rUser.name}\n**ID:** \`${rUser.id}\`\n\n👇 **Link:**\n\`/linkroblox roblox_id:${rUser.id}\``, SETTINGS.COLOR_SUCCESS)] });
         }
         return interaction.reply({ content: "❌ Not Found", ephemeral: true });
     } catch (e) { return interaction.reply({ content: "❌ API Error", ephemeral: true }); }
@@ -22,16 +22,45 @@ async function handleLinkRoblox(interaction) {
     const rId = interaction.options.getString("roblox_id");
     if (!/^\d+$/.test(rId)) return interaction.reply({ content: "❌ Invalid ID.", ephemeral: true });
     await supabase.from("roblox_links").upsert({ discord_id: interaction.user.id, roblox_id: rId });
+    // Fixed backticks
     return interaction.reply({ embeds: [createEmbed("✅ Account Linked", `**Success!** Linked to Roblox ID: \`${rId}\`.\nNow use \`/verify\`.`, SETTINGS.COLOR_SUCCESS)] });
 }
 
-// 🔥 SECURED ADMIN FUNCTIONS
+// 🔥 2. LOOKUP WITH PFP
+async function handleLookup(interaction) {
+    await interaction.deferReply();
+    const target = interaction.options.getString("target");
+    const { data } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
+    
+    if (!data) return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `No record for: \`${target}\``, SETTINGS.COLOR_ERROR)] });
+
+    // Fetch User for PFP
+    let userObj = null;
+    if (data.discord_id) { try { userObj = await interaction.client.users.fetch(data.discord_id); } catch(e){} }
+
+    const isExpired = data.expires_at && new Date(data.expires_at) < new Date();
+    const status = data.is_banned ? "🚫 **BANNED**" : (isExpired ? "🔴 **EXPIRED**" : "🟢 **ACTIVE**");
+
+    const embed = createEmbed("🔍 User Lookup", "", data.is_banned ? SETTINGS.COLOR_ERROR : SETTINGS.COLOR_INFO, userObj)
+        .addFields(
+            { name: "👤 User", value: data.discord_id ? `<@${data.discord_id}>` : "`Unlinked`", inline: true },
+            { name: "🔑 Code", value: `\`${data.code}\``, inline: true },
+            { name: "📝 Note", value: data.note ? `\`${data.note}\`` : "`None`", inline: true },
+            { name: "📡 Status", value: status, inline: true },
+            { name: "🖥️ HWID", value: `\`${data.hwid}\``, inline: false },
+            { name: "📅 Expires", value: data.expires_at ? `<t:${Math.floor(new Date(data.expires_at).getTime()/1000)}:F>` : "`Never`", inline: true },
+            { name: "⏳ Left", value: data.expires_at ? `<t:${Math.floor(new Date(data.expires_at).getTime()/1000)}:R>` : "`N/A`", inline: true }
+        );
+
+    return interaction.editReply({ embeds: [embed] });
+}
+
+// ... (Rest of functions SetCode, Ban, Rules, ActiveUsers, Verify same as provided before) ...
 async function handleSetCode(interaction) {
-    // Admin check is now in index.js, but double safety here doesn't hurt, though index.js handles it globally.
     const user = interaction.options.getUser("user");
     const code = interaction.options.getString("code");
     await supabase.from("verifications").upsert({ discord_id: user.id, code: code, verified: false, hwid: "RESET_ADMIN" }, { onConflict: 'discord_id' });
-    return interaction.reply({ embeds: [createEmbed("✅ Code Updated", `User: ${user}\nNew Code: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
+    return interaction.reply({ embeds: [createEmbed("✅ Code Updated", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
 }
 
 async function handleBanSystem(interaction) {
@@ -39,20 +68,44 @@ async function handleBanSystem(interaction) {
     const target = interaction.options.getString("target");
     if (sub === "ban") {
         await supabase.from("verifications").update({ is_banned: true, verified: false }).or(`code.eq.${target},hwid.eq.${target}`);
-        return interaction.reply({ embeds: [createEmbed("🚫 User Banned", `Target: \`${target}\``, SETTINGS.COLOR_ERROR)] });
+        return interaction.reply({ embeds: [createEmbed("🚫 Banned", `Target: \`${target}\``, SETTINGS.COLOR_ERROR)] });
     }
     if (sub === "unban") {
         await supabase.from("verifications").update({ is_banned: false }).or(`code.eq.${target},hwid.eq.${target}`);
-        return interaction.reply({ embeds: [createEmbed("✅ User Unbanned", `Target: \`${target}\``, SETTINGS.COLOR_SUCCESS)] });
+        return interaction.reply({ embeds: [createEmbed("✅ Unbanned", `Target: \`${target}\``, SETTINGS.COLOR_SUCCESS)] });
     }
     if (sub === "list") {
         const { data } = await supabase.from("verifications").select("*").eq("is_banned", true);
-        const list = data.map(u => `\`${u.code}\``).join("\n") || "No bans.";
-        return interaction.reply({ embeds: [createEmbed("📜 Ban List", list, SETTINGS.COLOR_WARN)] });
+        return interaction.reply({ embeds: [createEmbed("📜 Ban List", data.map(u => `\`${u.code}\``).join("\n") || "No bans.", SETTINGS.COLOR_WARN)] });
     }
 }
 
-// ... (Active Users, Rules, CheckAlts logic same as before, they are called from index.js) ...
+async function handleRules(interaction) {
+    const sub = interaction.options.getSubcommand();
+    if (sub === "set") {
+        await supabase.from("role_rules").upsert({ role_id: interaction.options.getRole("role").id, role_name: interaction.options.getRole("role").name, duration: interaction.options.getString("duration") }, { onConflict: 'role_id' });
+        return interaction.reply("✅ Rule Set");
+    }
+    if (sub === "remove") {
+        await supabase.from("role_rules").delete().eq("role_id", interaction.options.getRole("role").id);
+        return interaction.reply("✅ Rule Removed");
+    }
+    if (sub === "list") {
+        const { data } = await supabase.from("role_rules").select("*");
+        return interaction.reply({ embeds: [createEmbed("📜 Rules", data.map(r => `<@&${r.role_id}>: ${r.duration}`).join("\n"), SETTINGS.COLOR_INFO)] });
+    }
+}
+
+async function handleSetExpiry(interaction) {
+    await interaction.deferReply();
+    const ms = parseDuration(interaction.options.getString("duration"));
+    const target = interaction.options.getString("target");
+    const note = interaction.options.getString("note") || null;
+    const expiry = ms === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + ms).toISOString();
+    await supabase.from("verifications").update({ verified: true, expires_at: expiry, note: note }).or(`code.eq.${target},hwid.eq.${target}`);
+    return interaction.editReply({ embeds: [createEmbed("✅ Expiry Updated", `Target: \`${target}\`\nNote: ${note}`, SETTINGS.COLOR_SUCCESS)] });
+}
+
 async function handleActiveUsers(interaction, page = 1) {
     const LIMIT = 10;
     const offset = (page - 1) * LIMIT;
@@ -85,45 +138,6 @@ async function handleCheckAlts(interaction) {
     return interaction.editReply({ embeds: [createEmbed(`⚠️ ${alts.length} Alt Users`, desc, SETTINGS.COLOR_WARN)] });
 }
 
-async function handleSetExpiry(interaction) {
-    await interaction.deferReply();
-    const ms = parseDuration(interaction.options.getString("duration"));
-    const target = interaction.options.getString("target");
-    const note = interaction.options.getString("note") || null;
-    const expiry = ms === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + ms).toISOString();
-    await supabase.from("verifications").update({ verified: true, expires_at: expiry, note: note }).or(`code.eq.${target},hwid.eq.${target}`);
-    return interaction.editReply({ embeds: [createEmbed("✅ Expiry Updated", `Target: \`${target}\`\nNote: ${note}`, SETTINGS.COLOR_SUCCESS)] });
-}
-
-async function handleLookup(interaction) {
-    await interaction.deferReply();
-    const target = interaction.options.getString("target");
-    const { data } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target}`).maybeSingle();
-    if (!data) return interaction.editReply("❌ Not Found");
-    let userObj = null;
-    if (data.discord_id) try { userObj = await interaction.client.users.fetch(data.discord_id); } catch(e){}
-    const embed = createEmbed("🔍 Lookup", "", data.is_banned ? SETTINGS.COLOR_ERROR : SETTINGS.COLOR_INFO, userObj)
-        .addFields({ name: "User", value: data.discord_id ? `<@${data.discord_id}>` : "Unlinked", inline: true }, { name: "Code", value: `\`${data.code}\``, inline: true }, { name: "Note", value: data.note || "None", inline: true }, { name: "HWID", value: `\`${data.hwid}\``, inline: false }, { name: "Expiry", value: data.expires_at ? `<t:${Math.floor(new Date(data.expires_at).getTime()/1000)}:R>` : "N/A", inline: true });
-    return interaction.editReply({ embeds: [embed] });
-}
-
-async function handleRules(interaction) {
-    const sub = interaction.options.getSubcommand();
-    if (sub === "set") {
-        await supabase.from("role_rules").upsert({ role_id: interaction.options.getRole("role").id, role_name: interaction.options.getRole("role").name, duration: interaction.options.getString("duration") }, { onConflict: 'role_id' });
-        return interaction.reply("✅ Rule Set");
-    }
-    if (sub === "remove") {
-        await supabase.from("role_rules").delete().eq("role_id", interaction.options.getRole("role").id);
-        return interaction.reply("✅ Rule Removed");
-    }
-    if (sub === "list") {
-        const { data } = await supabase.from("role_rules").select("*");
-        return interaction.reply({ embeds: [createEmbed("📜 Rules", data.map(r => `<@&${r.role_id}>: ${r.duration}`).join("\n"), SETTINGS.COLOR_INFO)] });
-    }
-}
-
-// ... (processVerification same as previous) ...
 async function processVerification(user, code, guild, replyCallback) {
     if (SETTINGS.MAINTENANCE) return replyCallback({ content: "🚧 Maintenance", ephemeral: true });
     const { data: link } = await supabase.from("roblox_links").select("*").eq("discord_id", user.id).maybeSingle();
