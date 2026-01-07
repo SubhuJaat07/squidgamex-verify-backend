@@ -1,6 +1,7 @@
 const { ActionRowBuilder, UserSelectMenuBuilder } = require("discord.js");
 const { supabase, createEmbed, SETTINGS } = require("./config");
 
+// 🔥 1. WHITELIST
 async function handleWhitelist(interaction) {
     const action = interaction.options.getString("action");
     const gid = interaction.guild.id;
@@ -23,7 +24,7 @@ async function handleWhitelist(interaction) {
     if (action === "list") return interaction.reply({ embeds: [createEmbed("🛡️ Whitelist", list.map(id=>`<@${id}>`).join("\n")||"Empty", SETTINGS.COLOR_INFO)] });
 }
 
-// ... (Welcome, Rewards, Sync code same as previously provided, logic is perfect) ...
+// 🔥 2. WELCOME (Fixed Logic)
 async function handleWelcome(interaction) {
     const sub = interaction.options.getSubcommand();
     const gid = interaction.guild.id;
@@ -31,6 +32,36 @@ async function handleWelcome(interaction) {
     if (sub === "message") { await supabase.from("guild_config").upsert({ guild_id: gid, welcome_title: interaction.options.getString("title"), welcome_desc: interaction.options.getString("description") }, {onConflict:'guild_id'}); return interaction.reply("✅ Message Set"); }
     if (sub === "toggle") { await supabase.from("guild_config").upsert({ guild_id: gid, welcome_enabled: interaction.options.getString("state")==='on' }, {onConflict:'guild_id'}); return interaction.reply("✅ Updated"); }
     if (sub === "test") { await trackJoin(interaction.member); return interaction.reply({content:"Sent test", ephemeral:true}); }
+}
+
+// 🔥 3. TRACK JOIN (Fixed Placeholders)
+async function trackJoin(member) {
+    try {
+        // Track
+        await supabase.from("joins").insert({ guild_id: member.guild.id, user_id: member.id, inviter_id: 'unknown', code: 'auto' });
+        
+        // Fetch Config
+        const { data: config } = await supabase.from("guild_config").select("*").eq("guild_id", member.guild.id).maybeSingle();
+        
+        if (config?.welcome_enabled && config?.welcome_channel) {
+            const ch = member.guild.channels.cache.get(config.welcome_channel);
+            if(ch) {
+                // Determine Inviter (Best Effort)
+                let inviterText = "Unknown";
+                const { data: joinData } = await supabase.from("joins").select("inviter_id").eq("guild_id", member.guild.id).eq("user_id", member.id).maybeSingle();
+                if(joinData && joinData.inviter_id && joinData.inviter_id !== 'unknown') inviterText = `<@${joinData.inviter_id}>`;
+
+                // Replace Placeholders
+                const title = (config.welcome_title || "Welcome!").replace(/{user}/g, member.user.username);
+                const desc = (config.welcome_desc || "Welcome {user} to the server!")
+                    .replace(/{user}/g, `<@${member.id}>`)
+                    .replace(/{count}/g, member.guild.memberCount)
+                    .replace(/{inviter}/g, inviterText);
+
+                ch.send({ embeds: [createEmbed(title, desc, SETTINGS.COLOR_SUCCESS, member.user)] });
+            }
+        }
+    } catch(e){ console.error("Welcome Error", e); }
 }
 
 async function handleRewards(interaction) {
@@ -58,17 +89,6 @@ async function handleBatchSync(interaction) {
     await supabase.from("joins").upsert({ guild_id: interaction.guild.id, user_id: t, inviter_id: i, code: "manual" });
     if(i!=='left_user') { const {data:ex}=await supabase.from("invite_stats").select("*").eq("guild_id",interaction.guild.id).eq("inviter_id",i).maybeSingle(); await supabase.from("invite_stats").upsert({guild_id:interaction.guild.id, inviter_id:i, real_invites:(ex?.real_invites||0)+1}); }
     await showBatchSync(interaction);
-}
-
-async function trackJoin(member) {
-    try {
-        await supabase.from("joins").insert({ guild_id: member.guild.id, user_id: member.id, inviter_id: 'unknown', code: 'auto' });
-        const { data: config } = await supabase.from("guild_config").select("*").eq("guild_id", member.guild.id).maybeSingle();
-        if (config?.welcome_enabled && config?.welcome_channel) {
-            const ch = member.guild.channels.cache.get(config.welcome_channel);
-            if(ch) ch.send({ embeds: [createEmbed(config.welcome_title||"Welcome", (config.welcome_desc||"Welcome {user}").replace(/{user}/g, `<@${member.id}>`), SETTINGS.COLOR_SUCCESS, member.user)] });
-        }
-    } catch(e){}
 }
 
 async function handleLeaderboard(interaction) {
