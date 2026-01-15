@@ -9,17 +9,17 @@ const SETTINGS = {
     VERIFY_CHANNEL_ID: "1444769950421225542", 
     LOG_WEBHOOK_URL: "https://discord.com/api/webhooks/1456482277180833914/IMGgjiLSqkIlBizpuaHmuZI2Qd7IVHXFZvACm_MkqaI2xWkJFyPfsIqhTyr77ZI9CcsQ",
     
-    DEFAULT_VERIFY_MS: 18 * 60 * 60 * 1000, 
-    DEFAULT_PUNISH_MS: 1 * 60 * 60 * 1000,
+    DEFAULT_VERIFY_MS: 18 * 60 * 60 * 1000, // 18 Hours
+    DEFAULT_PUNISH_MS: 1 * 60 * 60 * 1000,  // 1 Hour
     ROBLOX_API: "https://users.roblox.com/v1/usernames/users",
     
-    // Icons & Colors
+    // Colors
     COLOR_SUCCESS: 0x00FF00,
     COLOR_ERROR: 0xFF0000,
     COLOR_INFO: 0x0099FF,
     COLOR_WARN: 0xFFA500,
     FOOTER_ICON: "https://i.imgur.com/AfFp7pu.png",
-    FOOTER_TEXT: "Squid Game X • Developed By Subhu Jaat",
+    FOOTER_TEXT: "Squid Game X • Security System",
     
     MAINTENANCE: false
 };
@@ -28,10 +28,9 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const webhook = new WebhookClient({ url: SETTINGS.LOG_WEBHOOK_URL });
 
 function createEmbed(title, description, color = SETTINGS.COLOR_INFO, user = null) {
-    const safeDesc = (description && description.length > 0) ? description : "Processing...";
     const embed = new EmbedBuilder()
         .setTitle(title)
-        .setDescription(safeDesc)
+        .setDescription(description || "Processing...")
         .setColor(color)
         .setFooter({ text: SETTINGS.FOOTER_TEXT, iconURL: SETTINGS.FOOTER_ICON })
         .setTimestamp();
