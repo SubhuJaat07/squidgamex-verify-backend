@@ -1,821 +1,609 @@
-ab me isme kuchh bugs bta rha hu jo tum kaha kya add krn hi btake solve krdena
-
-sabse pahle welcome se related invite 1 user ki max 1 hi dikh rha h and secondly whoinvite user command missing hai and welcome se related command mst work kr rhi h and 1 user ke total invitation dekhne ke liye invitation list command add kro jo us user ke total invitation ka data dikhaye even ye bhi ki is user ke kon konse invitations ne leave krdiya etc sb and name aage join dte bhi dikhaye, and user server chhodne pe bye msg dikhaye,
-
-and welcome se related sabhi command jise welcome test,welcome channel,welcome toggle, welcome msg etc sb enue me ho mtlab command 1 hi ho welcome name se and usme ye menue open ho
-
-and poll me databaase error bta rha hai poll bnate hi isliye test nhi kr paya
-
-bansystem ban me user banned show krta but really me ban nhi ho rha and koi user find na ho to ban ki jgah and unban ki jagah user not found bta diya kro and ban and unban ka logic fix kro
-
-and lookup response me admin note ka option aa rha hai lekin admin ke lioye koi note save krne ka option nhi hai and jb user verify krta hai to applied logic undefined aa rha hai and user verify kre and lookup etc me linked roblox id dikhan i chahiye
-
-ab get roblox id sahi nhi hai iski jagah ye krdo ki user first time verify kre to usko ek roblox username bhrne ka option de jisme roblox id bhrne ke bd usko pahle ss me dikhaye hisasb se roblox id dikhaye aand confirmtion kre ki yhi id hai varna user ab getid se id to le lete hi lekin link roblox me apna key link kr rhe hai
-
-and rule vali command jaise rule add, list,remove in sabko bhi menue me krdo jaha rule type krne pe list,remove,add ka menue open ho
-
-and rule list ka response sahi nhi hai,+1h , 20h ,punish 1 etc sb eksath aa rhe hai jabki alag alag title ke sath aane chhiye
-
-and rule remove ho rhe pr new rule add nhi ho rha and also punish 1, punish 2 etc ka logic bhul gye ki role me punish name detected ho to rule me sabse km verification hour vala select krna hai
-
-ab alt ke msg se related problem hai, alt detected hone pe pura msg jana chahiye old verified key and hwid , new key and hwid and kab kab verify ki etc and ho ske to kis roblox id se h ye bhi
-
-checkalt command me last alt jis user ne verify kiy sirf usiko dikha rha hai
-
-custom key set sahise work kr rha hai
-
-configping me bhi menue dalo jaise toggle enable desable and list pingpunish and whitlist vali command bhi isi menue me shift krdo and also ho ske to supabase me new ping punish id ka section jodado and pingpunish me bhi admin kisi specific username ko dalke usko ping ke liye punish add kr ske and ping punish me agar role add kre to vo kitne time ke liye rhe ye option bhi do but pingpunish se related kaam ke liye command ek hi rkho jaise pingpunish main command ka name ho and usase related sare option menue me aa jaye
-
-and admin only command rkho jo new key vale user ke verify krne pe and roblox id link krne pe last me ek custom msg bheje jo us command se set kiya hai and iske menue me bhi set remove etc ka option rkho, and koi ek roblox id se 2 key link kre to bhi us webhook me full detail ke sath msg jana chahiye
-
-and welcome command ke menue me ek custom bye msg ka option bhi rkho jo user ke leave pe bye bole
-
-ab isme se index.js se related sare changes krdo bina current code ko chhota kiye 
-
-const express = require("express");
-
-const cors = require("cors");
-
 const { 
-
-    Client, 
-
-    GatewayIntentBits, 
-
-    Partials, 
-
-    Routes, 
-
-    REST, 
-
-    SlashCommandBuilder, 
-
-    PermissionsBitField, 
-
-    EmbedBuilder 
-
-} = require("discord.js");
-
-
-
-const { 
-
     SETTINGS, 
-
     supabase, 
-
-    isAdmin, 
-
     createEmbed, 
-
+    formatTime, 
     parseDuration, 
-
     logToWebhook 
-
 } = require("./config");
 
-
-
 const { 
-
-    processVerification, 
-
-    handleGetRobloxId, 
-
-    handleLinkRoblox, 
-
-    handleActiveUsers, 
-
-    handleSetCode, 
-
-    handleBanSystem, 
-
-    handleRules, 
-
-    handleLookup, 
-
-    handleSetExpiry, 
-
-    handleCheckAlts,
-
-    handleKeyUpdate // <--- New Function Import
-
-} = require("./verification");
-
-
-
-const { 
-
-    handleWhitelist, 
-
-    handleWelcome, 
-
-    handleRewards, 
-
-    trackJoin, 
-
-    showBatchSync, 
-
-    handleBatchSync, 
-
-    handleLeaderboard 
-
-} = require("./invite");
-
-
-
-const { 
-
-    handlePollCreate, 
-
-    handlePollVote, 
-
-    handlePollEnd, 
-
-    handlePollResults 
-
-} = require("./poll");
-
-
+    EmbedBuilder, 
+    ActionRowBuilder, 
+    ButtonBuilder, 
+    ButtonStyle, 
+    ModalBuilder, 
+    TextInputBuilder, 
+    TextInputStyle 
+} = require("discord.js");
 
 // =====================================================================
-
-// 🌐 EXPRESS API SERVER
-
+// 🌐 SECTION 1: INTERACTIVE VERIFICATION FLOW
 // =====================================================================
 
-const app = express();
-
-app.use(cors());
-
-app.use(express.json());
-
-
-
-app.get("/", (req, res) => res.send("System Online 🟢 | Squid Game X Backend"));
-
-
-
-// Check Endpoint for Script
-
-app.get("/check", async (req, res) => {
-
-    if (SETTINGS.MAINTENANCE) return res.json({ status: "ERROR", message: "Maintenance Mode" });
-
+/**
+ * Handles the initial /verify command.
+ * If user is linked -> Verifies directly.
+ * If NOT linked -> Shows a button to start linking process.
+ */
+async function handleVerifyCommand(interaction) {
+    const code = interaction.options.getString("code");
     
-
-    const { hwid } = req.query;
-
-    if (!hwid) return res.json({ status: "ERROR", message: "HWID Missing" });
-
+    // 1. Check if user is already linked
+    const { data: link } = await supabase.from("roblox_links")
+        .select("*")
+        .eq("discord_id", interaction.user.id)
+        .maybeSingle();
     
+    // 2. If NOT linked, show the interactive button
+    if (!link) {
+        const embed = createEmbed(
+            "⚠️ Account Not Linked", 
+            "To verify, you must first link your Roblox account.\nClick the button below to start the process.", 
+            SETTINGS.COLOR_WARN
+        );
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`link_start_${code}`) // Pass code to next step
+                .setLabel("🔗 Link Roblox Account")
+                .setStyle(ButtonStyle.Primary)
+        );
+
+        return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+    }
+
+    // 3. If Linked, proceed to verification immediately
+    await processVerification(interaction.user, code, interaction.guild, (opts) => interaction.reply(opts));
+}
+
+/**
+ * Step 2: Opens the Modal for Roblox Username input.
+ * Triggered by the "Link Roblox Account" button.
+ */
+async function handleLinkButton(interaction) {
+    const code = interaction.customId.split('_')[2]; // Retrieve code from button ID
+
+    const modal = new ModalBuilder()
+        .setCustomId(`link_modal_${code}`)
+        .setTitle("Link Roblox Account");
+
+    const usernameInput = new TextInputBuilder()
+        .setCustomId("r_username")
+        .setLabel("Enter your Roblox Username")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+    const firstActionRow = new ActionRowBuilder().addComponents(usernameInput);
+    modal.addComponents(firstActionRow);
+
+    await interaction.showModal(modal);
+}
+
+/**
+ * Step 3: Handles Modal Submit -> Fetches Roblox Info -> Shows Confirmation.
+ */
+async function handleLinkModal(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const username = interaction.fields.getTextInputValue("r_username");
+    const code = interaction.customId.split('_')[2]; 
 
     try {
+        // Fetch User ID from Roblox
+        const response = await fetch(SETTINGS.ROBLOX_API, { 
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({ 
+                usernames: [username], 
+                excludeBannedUsers: true 
+            }) 
+        });
 
-        const { data } = await supabase.from("verifications").select("*").eq("hwid", hwid).maybeSingle();
-
+        const json = await response.json();
         
-
-        if (data) {
-
-            if (data.is_banned) return res.json({ status: "BANNED" });
-
-            
-
-            const now = new Date();
-
-            const expiry = new Date(data.expires_at);
-
-            
-
-            if (data.verified && expiry > now) {
-
-                return res.json({ status: "VALID", message: "Access Granted" });
-
+        if (!json.data || json.data.length === 0) {
+            return interaction.editReply({ 
+                embeds: [createEmbed("❌ User Not Found", `Could not find Roblox user: **${username}**`, SETTINGS.COLOR_ERROR)] 
+            });
+        }
+        
+        const rUser = json.data[0];
+        
+        // Fetch Thumbnail for visual confirmation
+        let avatarUrl = "";
+        try {
+            const thumbRes = await fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${rUser.id}&size=150x150&format=Png&isCircular=false`);
+            const thumbJson = await thumbRes.json();
+            if (thumbJson.data && thumbJson.data.length > 0) {
+                avatarUrl = thumbJson.data[0].imageUrl;
             }
-
-            return res.json({ status: "NEED_VERIFY", code: data.code });
-
+        } catch (e) {
+            console.error("Thumbnail Fetch Error:", e);
         }
 
+        // Show Confirmation Embed
+        const embed = createEmbed("👤 Confirm Identity", `Is this your Roblox account?\n\n**Username:** ${rUser.name}\n**ID:** \`${rUser.id}\``, SETTINGS.COLOR_INFO);
+        if (avatarUrl) embed.setThumbnail(avatarUrl);
         
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`link_confirm_${rUser.id}_${rUser.name}_${code}`)
+                .setLabel("✅ Yes, Link & Verify")
+                .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId("link_cancel")
+                .setLabel("❌ No, Wrong Account")
+                .setStyle(ButtonStyle.Secondary)
+        );
 
-        // Register New HWID
-
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-
-        await supabase.from("verifications").insert([{ hwid, code, verified: false, is_banned: false }]);
-
-        
-
-        return res.json({ status: "NEED_VERIFY", code });
+        await interaction.editReply({ embeds: [embed], components: [row] });
 
     } catch (e) { 
+        console.error("API Error:", e);
+        interaction.editReply({ content: "❌ **API Error:** Failed to contact Roblox API." }); 
+    }
+}
 
-        console.error(e);
-
-        return res.json({ status: "ERROR" }); 
-
+/**
+ * Step 4: Final Confirmation -> Save to DB -> Run Verification.
+ */
+async function handleLinkConfirm(interaction) {
+    if (interaction.customId === "link_cancel") {
+        return interaction.update({ content: "❌ Process Cancelled.", embeds: [], components: [] });
     }
 
-});
-
-
-
-app.listen(SETTINGS.PORT, () => console.log(`🚀 API Server Running on Port ${SETTINGS.PORT}`));
-
-
-
-// =====================================================================
-
-// 🤖 DISCORD CLIENT SETUP
-
-// =====================================================================
-
-const client = new Client({ 
-
-    intents: [ 
-
-        GatewayIntentBits.Guilds, 
-
-        GatewayIntentBits.GuildMessages, 
-
-        GatewayIntentBits.MessageContent, 
-
-        GatewayIntentBits.GuildMembers, 
-
-        GatewayIntentBits.GuildInvites,
-
-        GatewayIntentBits.GuildModeration
-
-    ], 
-
-    partials: [Partials.GuildMember, Partials.Channel] 
-
-});
-
-
-
-// =====================================================================
-
-// 📝 SLASH COMMANDS REGISTRY
-
-// =====================================================================
-
-const commands = [
-
-    // 1. PUBLIC USER COMMANDS
-
-    new SlashCommandBuilder()
-
-        .setName("verify")
-
-        .setDescription("Verify your key to access the script")
-
-        .addStringOption(o => o.setName("code").setDescription("Enter your key code").setRequired(true)),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("getid")
-
-        .setDescription("Get a Roblox User ID from Username")
-
-        .addStringOption(o => o.setName("username").setDescription("Roblox Username").setRequired(true)),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("linkroblox")
-
-        .setDescription("Link your Discord to Roblox")
-
-        .addStringOption(o => o.setName("roblox_id").setDescription("Your Roblox ID").setRequired(true)),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("leaderboard")
-
-        .setDescription("Show Invite Leaderboard"),
-
-
-
-    // 2. ADMIN TOOLS & UTILITIES
-
-    new SlashCommandBuilder()
-
-        .setName("admin")
-
-        .setDescription("Admin Utility Tools")
-
-        .addSubcommand(s => s.setName("say").setDescription("Make the bot send a message").addStringOption(o => o.setName("message").setDescription("Text to send").setRequired(true)).addChannelOption(o => o.setName("channel").setDescription("Target Channel")))
-
-        .addSubcommand(s => s.setName("announce").setDescription("Send a professional announcement embed").addStringOption(o => o.setName("title").setDescription("Title").setRequired(true)).addStringOption(o => o.setName("message").setDescription("Description").setRequired(true)).addChannelOption(o => o.setName("channel").setDescription("Channel")).addStringOption(o => o.setName("image").setDescription("Image URL")))
-
-        .addSubcommand(s => s.setName("dm").setDescription("Direct Message a user").addUserOption(o => o.setName("user").setDescription("Target User").setRequired(true)).addStringOption(o => o.setName("message").setDescription("Message Content").setRequired(true))),
-
-
-
-    // 3. SECURITY & VERIFICATION MANAGEMENT
-
-    new SlashCommandBuilder()
-
-        .setName("setkey") // 🔥 NEW COMMAND
-
-        .setDescription("Manually update or reset a user's key")
-
-        .addStringOption(o => o.setName("target").setDescription("User ID, HWID, or Old Code").setRequired(true))
-
-        .addStringOption(o => o.setName("new_code").setDescription("The New Key Code").setRequired(true)),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("setcode") // Legacy User-based set
-
-        .setDescription("Set a custom code for a Discord User")
-
-        .addUserOption(o => o.setName("user").setDescription("Target User").setRequired(true))
-
-        .addStringOption(o => o.setName("code").setDescription("New Code").setRequired(true)),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("lookup")
-
-        .setDescription("Lookup User/Key Information")
-
-        .addStringOption(o => o.setName("target").setDescription("Code, HWID, or User ID").setRequired(true)),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("bansystem")
-
-        .setDescription("Manage Script Bans")
-
-        .addSubcommand(s => s.setName("ban").setDescription("Ban a user/hwid").addStringOption(o => o.setName("target").setRequired(true).setDescription("Target Code/HWID")))
-
-        .addSubcommand(s => s.setName("unban").setDescription("Unban a user/hwid").addStringOption(o => o.setName("target").setRequired(true).setDescription("Target Code/HWID")))
-
-        .addSubcommand(s => s.setName("list").setDescription("List all bans")),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("activeusers")
-
-        .setDescription("Show list of currently active key users"),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("checkalts")
-
-        .setDescription("Check for users with multiple active keys"),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("setexpiry")
-
-        .setDescription("Manually set key expiration")
-
-        .addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true))
-
-        .addStringOption(o => o.setName("duration").setDescription("1d, 12h, lifetime").setRequired(true))
-
-        .addStringOption(o => o.setName("note").setDescription("Admin Note")),
-
-
-
-    // 4. SERVER PROTECTION & CONFIG
-
-    new SlashCommandBuilder()
-
-        .setName("whitelist")
-
-        .setDescription("Manage Anti-Ping Whitelist")
-
-        .addStringOption(o => o.setName("action").setDescription("Select Action").setRequired(true).addChoices({ name: 'Add', value: 'add' }, { name: 'Remove', value: 'remove' }, { name: 'List', value: 'list' }))
-
-        .addUserOption(o => o.setName("user").setDescription("Target User"))
-
-        .addRoleOption(o => o.setName("role").setDescription("Target Role")),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("config")
-
-        .setDescription("Bot Configuration")
-
-        .addSubcommand(s => s.setName("pingpunish").setDescription("Setup Anti-Ping Punishment").addStringOption(o => o.setName("type").setDescription("Punish Type").setRequired(true).addChoices({ name: 'Role', value: 'role' }, { name: 'Timeout', value: 'timeout' })).addStringOption(o => o.setName("value").setDescription("Role ID or Duration (10m)").setRequired(true))),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("rules")
-
-        .setDescription("Manage Verification Rules")
-
-        .addSubcommand(s => s.setName("set").setDescription("Set Role Duration").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")).addStringOption(o => o.setName("duration").setRequired(true).setDescription("Time")))
-
-        .addSubcommand(s => s.setName("remove").setDescription("Remove Rule").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")))
-
-        .addSubcommand(s => s.setName("list").setDescription("List Rules")),
-
-
-
-    // 5. INVITE & WELCOME
-
-    new SlashCommandBuilder()
-
-        .setName("welcome")
-
-        .setDescription("Welcome System Settings")
-
-        .addSubcommand(s => s.setName("channel").setDescription("Set Welcome Channel").addChannelOption(o => o.setName("target").setDescription("Channel").setRequired(true)))
-
-        .addSubcommand(s => s.setName("message").setDescription("Set Welcome Message").addStringOption(o => o.setName("title").setDescription("Embed Title").setRequired(true)).addStringOption(o => o.setName("description").setDescription("Use {user}, {count}, {inviter}").setRequired(true)))
-
-        .addSubcommand(s => s.setName("toggle").setDescription("Enable/Disable").addStringOption(o => o.setName("state").setDescription("State").setRequired(true).addChoices({ name: 'On', value: 'on' }, { name: 'Off', value: 'off' })))
-
-        .addSubcommand(s => s.setName("test").setDescription("Test Welcome Message")),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("rewards")
-
-        .setDescription("Manage Invite Rewards")
-
-        .addSubcommand(s => s.setName("add").setDescription("Add Reward").addIntegerOption(o => o.setName("invites").setDescription("Count").setRequired(true)).addRoleOption(o => o.setName("role").setDescription("Role").setRequired(true)))
-
-        .addSubcommand(s => s.setName("remove").setDescription("Remove Reward").addIntegerOption(o => o.setName("id").setDescription("Reward ID").setRequired(true)))
-
-        .addSubcommand(s => s.setName("list").setDescription("List Rewards")),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("syncmissing")
-
-        .setDescription("Sync Invites (Admin)"),
-
-
-
-    // 6. POLL SYSTEM
-
-    new SlashCommandBuilder()
-
-        .setName("poll")
-
-        .setDescription("Create an Advanced Poll")
-
-        .addStringOption(o => o.setName("q").setDescription("Question").setRequired(true))
-
-        .addStringOption(o => o.setName("o1").setDescription("Option 1").setRequired(true))
-
-        .addStringOption(o => o.setName("o2").setDescription("Option 2").setRequired(true))
-
-        .addStringOption(o => o.setName("o3").setDescription("Option 3"))
-
-        .addStringOption(o => o.setName("o4").setDescription("Option 4"))
-
-        .addStringOption(o => o.setName("o5").setDescription("Option 5"))
-
-        .addRoleOption(o => o.setName("punish_role").setDescription("Role for Non-Voters"))
-
-        .addBooleanOption(o => o.setName("multiple").setDescription("Allow Multiple Votes")),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("endpoll")
-
-        .setDescription("End a Poll & Punish")
-
-        .addIntegerOption(o => o.setName("id").setDescription("Poll ID").setRequired(true))
-
-        .addStringOption(o => o.setName("duration").setDescription("Punish Duration (e.g. 2d)")),
-
-
-
-    new SlashCommandBuilder()
-
-        .setName("pollresults")
-
-        .setDescription("View Detailed Poll Results")
-
-        .addIntegerOption(o => o.setName("pollid").setDescription("Poll ID").setRequired(true))
-
-
-
-].map(c => c.toJSON());
-
-
-
-// =====================================================================
-
-// 🚀 EVENT HANDLERS
-
-// =====================================================================
-
-
-
-client.once("ready", async () => {
-
-    console.log(`✅ Logged in as ${client.user.tag}`);
-
-    console.log(`📡 Registering ${commands.length} commands...`);
-
+    await interaction.deferUpdate();
     
+    // Extract data from Custom ID: link_confirm_ID_NAME_CODE
+    const parts = interaction.customId.split('_');
+    const rId = parts[2];
+    const rName = parts[3];
+    const code = parts[4];
 
-    try { 
+    // 1. Check if Roblox ID is already linked to ANOTHER Discord account (Alt Protection)
+    const { data: existing } = await supabase.from("roblox_links")
+        .select("discord_id")
+        .eq("roblox_id", rId)
+        .maybeSingle();
 
-        const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
-
-        await rest.put(Routes.applicationGuildCommands(client.user.id, SETTINGS.GUILD_ID), { body: commands });
-
-        console.log("✅ Commands Registered Successfully!");
-
-    } catch(e) { 
-
-        console.error("❌ Command Reg Error:", e); 
-
+    if (existing && existing.discord_id !== interaction.user.id) {
+        // Log this attempt
+        await logToWebhook(
+            "⚠️ **Alt Link Attempt Detected**", 
+            `**User:** <@${interaction.user.id}> tried to link Roblox ID \`${rId}\` (${rName}).\n**Status:** This Roblox ID is already linked to <@${existing.discord_id}>.\n**Action:** Link Overwritten.`
+        );
     }
 
-});
-
-
-
-// 🔥 INTERACTION HANDLER
-
-client.on("interactionCreate", async interaction => {
-
-    try {
-
-        // Handle Poll Votes & Batch Sync Buttons
-
-        if (interaction.customId?.startsWith("vote_")) { await handlePollVote(interaction); return; }
-
-        if (interaction.customId?.startsWith("sync_")) { await handleBatchSync(interaction); return; }
-
-        if (interaction.customId?.startsWith("active_")) { 
-
-            const page = parseInt(interaction.customId.split('_')[2]); 
-
-            await handleActiveUsers(interaction, page); 
-
-            return; 
-
-        }
-
-
-
-        if (!interaction.isChatInputCommand()) return;
-
-
-
-        // --- PUBLIC COMMANDS ---
-
-        if (interaction.commandName === "verify") { 
-
-            await interaction.deferReply(); 
-
-            await processVerification(interaction.user, interaction.options.getString("code"), interaction.guild, (o) => interaction.editReply(o)); 
-
-            return; 
-
-        }
-
-        if (interaction.commandName === "getid") return handleGetRobloxId(interaction);
-
-        if (interaction.commandName === "linkroblox") return handleLinkRoblox(interaction);
-
-        if (interaction.commandName === "leaderboard") return handleLeaderboard(interaction);
-
-
-
-        // --- ADMIN ONLY CHECK ---
-
-        if (!await isAdmin(interaction.user.id)) {
-
-            return interaction.reply({ content: "❌ **Access Denied:** Administrators only.", ephemeral: true });
-
-        }
-
-
-
-        // --- ADMIN ROUTING ---
-
-        const cmd = interaction.commandName;
-
-
-
-        // Admin Tools
-
-        if (cmd === "admin") {
-
-            const sub = interaction.options.getSubcommand();
-
-            const ch = interaction.options.getChannel("channel") || interaction.channel;
-
-            
-
-            if (sub === "say") {
-
-                await ch.send(interaction.options.getString("message"));
-
-                interaction.reply({ content: "✅ Sent", ephemeral: true });
-
-            }
-
-            if (sub === "announce") {
-
-                const embed = createEmbed(interaction.options.getString("title"), interaction.options.getString("message"), 0xFFD700);
-
-                if (interaction.options.getString("image")) embed.setImage(interaction.options.getString("image"));
-
-                await ch.send({ embeds: [embed] });
-
-                interaction.reply({ content: "✅ Announced", ephemeral: true });
-
-            }
-
-            if (sub === "dm") {
-
-                try {
-
-                    await interaction.options.getUser("user").send(interaction.options.getString("message"));
-
-                    interaction.reply({ content: "✅ DM Sent", ephemeral: true });
-
-                } catch { interaction.reply({ content: "❌ DM Failed", ephemeral: true }); }
-
-            }
-
-        }
-
-
-
-        // Security & Config
-
-        else if (cmd === "whitelist") await handleWhitelist(interaction);
-
-        else if (cmd === "welcome") await handleWelcome(interaction);
-
-        else if (cmd === "rewards") await handleRewards(interaction);
-
-        else if (cmd === "activeusers") await handleActiveUsers(interaction, 1);
-
-        else if (cmd === "setcode") await handleSetCode(interaction);
-
-        else if (cmd === "setkey") await handleKeyUpdate(interaction); // 🔥 NEW
-
-        else if (cmd === "bansystem") await handleBanSystem(interaction);
-
-        else if (cmd === "rules") await handleRules(interaction);
-
-        else if (cmd === "lookup") await handleLookup(interaction);
-
-        else if (cmd === "setexpiry") await handleSetExpiry(interaction);
-
-        else if (cmd === "checkalts") await handleCheckAlts(interaction);
-
-        else if (cmd === "syncmissing") { 
-
-            await interaction.deferReply({ ephemeral: true }); 
-
-            await showBatchSync(interaction); 
-
-        }
-
-        else if (cmd === "config") {
-
-            const type = interaction.options.getString("type");
-
-            const val = interaction.options.getString("value");
-
-            if (type === 'role') await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, ping_punish_role: val });
-
-            else await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, ping_timeout_ms: parseDuration(val) });
-
-            interaction.reply("✅ Config Updated");
-
-        }
-
-
-
-        // Poll System
-
-        else if (cmd === "poll") await handlePollCreate(interaction);
-
-        else if (cmd === "endpoll") await handlePollEnd(interaction);
-
-        else if (cmd === "pollresults") await handlePollResults(interaction);
-
-
-
-    } catch (e) {
-
-        console.error("Interaction Error:", e);
-
-        if(!interaction.replied) interaction.reply({content: "❌ An internal error occurred.", ephemeral:true});
-
+    // 2. Save/Update Link
+    await supabase.from("roblox_links").upsert({ 
+        discord_id: interaction.user.id, 
+        roblox_id: rId, 
+        roblox_username: rName 
+    }, { onConflict: 'discord_id' });
+
+    // 3. Trigger Verification Process
+    await processVerification(interaction.user, code, interaction.guild, (opts) => interaction.editReply(opts));
+}
+
+// =====================================================================
+// 🛡️ SECTION 2: ADMIN & SECURITY COMMANDS
+// =====================================================================
+
+/**
+ * Admin: Add a note to a user's verification record.
+ * Usage: /setnote <target> <note>
+ */
+async function handleSetNote(interaction) {
+    // Admin check is done in index.js, but safe to keep here too
+    if (!await require("./config").isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Admin Only", ephemeral: true });
+
+    const target = interaction.options.getString("target");
+    const note = interaction.options.getString("note");
+
+    // Find User
+    const { data: user } = await supabase.from("verifications")
+        .select("id, discord_id")
+        .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
+        .maybeSingle();
+
+    if (!user) {
+        return interaction.reply({ content: `❌ **Error:** No user found for target \`${target}\`.`, ephemeral: true });
     }
 
-});
+    // Update Note
+    await supabase.from("verifications").update({ admin_note: note }).eq("id", user.id);
+    
+    return interaction.reply({ 
+        embeds: [createEmbed("✅ Note Updated", `**Target:** <@${user.discord_id}>\n**Note:** ${note}`, SETTINGS.COLOR_SUCCESS)] 
+    });
+}
 
-
-
-// 🔥 WELCOME TRACKER
-
-client.on("guildMemberAdd", trackJoin);
-
-
-
-// 🔥 TEXT COMMANDS & ANTI-PING
-
-client.on("messageCreate", async (message) => {
-
-    if (message.author.bot) return;
-
-
-
-    // Text Verification (verify 123456 or just 123456)
-
-    if (message.channel.id === SETTINGS.VERIFY_CHANNEL_ID) {
-
-        // Regex checks for "verify <code>" OR just digits "123456"
-
-        if (message.content.toLowerCase().startsWith("verify ") || /^\d+$/.test(message.content.trim())) {
-
-            await processVerification(message.author, message.content, message.guild, (opts) => message.reply(opts));
-
-        }
-
-    }
-
-
-
-    // Anti-Ping Logic
-
-    if (message.mentions.users.has(SETTINGS.SUPER_OWNER_ID) && message.author.id !== SETTINGS.SUPER_OWNER_ID && !message.reference) {
-
-        const { data } = await supabase.from("guild_config").select("*").eq("guild_id", message.guild.id).maybeSingle();
-
+/**
+ * Admin: Ban or Unban a user from using the script.
+ * Usage: /bansystem <ban/unban/list> <target>
+ */
+async function handleBanSystem(interaction) {
+    const sub = interaction.options.getSubcommand();
+    const target = interaction.options.getString("target");
+    
+    // Look up user first to confirm existence
+    if (sub !== 'list') {
+        const { data: user } = await supabase.from("verifications")
+            .select("*")
+            .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
+            .maybeSingle();
         
-
-        // Check Whitelist
-
-        if (data?.ping_whitelist?.includes(message.author.id)) return;
-
-
-
-        // Apply Punishment
-
-        if (message.member.moderatable) {
-
-            if (data?.ping_punish_role) {
-
-                await message.member.roles.add(data.ping_punish_role).catch(() => {});
-
-                message.reply("⚠️ **Do not ping Owner!** (Role Penalty Applied)");
-
-            } else {
-
-                const duration = data?.ping_timeout_ms || SETTINGS.DEFAULT_PUNISH_MS;
-
-                await message.member.timeout(duration, "Anti-Ping Violation");
-
-                message.reply(`⚠️ **Do not ping Owner!** (${duration/60000}m Timeout Applied)`);
-
-            }
-
+        if (!user) {
+            return interaction.reply({ content: `❌ **User Not Found:** Could not find any record for \`${target}\`.`, ephemeral: true });
         }
 
+        if (sub === "ban") {
+            await supabase.from("verifications").update({ is_banned: true, verified: false }).eq("id", user.id);
+            return interaction.reply({ 
+                embeds: [createEmbed("🚫 User Banned", `**Target:** \`${target}\`\n**Status:** Permanently Banned`, SETTINGS.COLOR_ERROR)] 
+            });
+        }
+        
+        if (sub === "unban") {
+            await supabase.from("verifications").update({ is_banned: false }).eq("id", user.id);
+            return interaction.reply({ 
+                embeds: [createEmbed("✅ User Unbanned", `**Target:** \`${target}\`\n**Status:** Access Restored`, SETTINGS.COLOR_SUCCESS)] 
+            });
+        }
     }
 
-});
+    if (sub === "list") {
+        const { data } = await supabase.from("verifications").select("*").eq("is_banned", true);
+        
+        let description = "No active bans.";
+        if (data && data.length > 0) {
+            description = data.map((u, i) => `**${i+1}.** Code: \`${u.code}\` | HWID: \`...${u.hwid.slice(-4)}\``).join("\n");
+        }
+        
+        return interaction.reply({ embeds: [createEmbed("📜 Ban List", description, SETTINGS.COLOR_WARN)] });
+    }
+}
 
+/**
+ * Admin: Lookup detailed info about a user/key.
+ * Shows Roblox ID, Discord, Key, HWID, and Expiry.
+ */
+async function handleLookup(interaction) {
+    await interaction.deferReply();
+    const target = interaction.options.getString("target");
+    
+    const { data } = await supabase.from("verifications")
+        .select("*")
+        .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
+        .maybeSingle();
+    
+    if (!data) {
+        return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `No data found for \`${target}\``, SETTINGS.COLOR_ERROR)] });
+    }
 
+    // Fetch Linked Roblox Data
+    const { data: rLink } = await supabase.from("roblox_links").select("*").eq("discord_id", data.discord_id).maybeSingle();
+    
+    // Status Logic
+    const isExpired = data.expires_at && new Date(data.expires_at) < new Date();
+    let statusText = "🟢 **ACTIVE**";
+    let color = SETTINGS.COLOR_SUCCESS;
 
-client.login(process.env.DISCORD_BOT_TOKEN);
+    if (data.is_banned) { statusText = "🚫 **BANNED**"; color = SETTINGS.COLOR_ERROR; }
+    else if (isExpired) { statusText = "🔴 **EXPIRED**"; color = SETTINGS.COLOR_WARN; }
+
+    // Fetch Discord User Object
+    let discordUser = null;
+    try { 
+        if (data.discord_id) discordUser = await interaction.client.users.fetch(data.discord_id); 
+    } catch(e){}
+
+    const embed = createEmbed("🔍 User Lookup", "", color, discordUser)
+        .addFields(
+            { name: "👤 Discord", value: data.discord_id ? `<@${data.discord_id}>` : "`Unlinked`", inline: true },
+            { name: "🎮 Roblox", value: rLink ? `[${rLink.roblox_username}](https://www.roblox.com/users/${rLink.roblox_id}/profile)` : "`Unlinked`", inline: true },
+            { name: "🔑 License Key", value: `\`${data.code}\``, inline: true },
+            { name: "📝 Admin Note", value: data.admin_note || "`None`", inline: true },
+            { name: "📡 Status", value: statusText, inline: true },
+            { name: "🖥️ HWID", value: `\`${data.hwid}\``, inline: false },
+            { name: "⏳ Expiry", value: data.expires_at ? `<t:${Math.floor(new Date(data.expires_at).getTime()/1000)}:F>` : "`Never`", inline: true }
+        );
+
+    return interaction.editReply({ embeds: [embed] });
+}
+
+// =====================================================================
+// ⚙️ SECTION 3: RULES & CONFIGURATION
+// =====================================================================
+
+/**
+ * Handles /rules command (add/remove/list).
+ */
+async function handleRules(interaction) {
+    const sub = interaction.options.getSubcommand();
+    
+    if (sub === "list") {
+        const { data } = await supabase.from("role_rules").select("*");
+        if (!data || data.length === 0) return interaction.reply({ embeds: [createEmbed("📜 Verification Rules", "No rules configured.", SETTINGS.COLOR_WARN)] });
+
+        const list = data.map((r, i) => `**${i+1}.** <@&${r.role_id}>\n   └ ⏳ Duration: **${r.duration}**`).join("\n");
+        return interaction.reply({ embeds: [createEmbed("📜 Verification Rules", list, SETTINGS.COLOR_INFO)] });
+    }
+
+    if (sub === "add" || sub === "set") {
+        const role = interaction.options.getRole("role");
+        const dur = interaction.options.getString("duration");
+        
+        await supabase.from("role_rules").upsert({ 
+            role_id: role.id, 
+            role_name: role.name, 
+            duration: dur 
+        }, { onConflict: 'role_id' });
+
+        return interaction.reply({ embeds: [createEmbed("✅ Rule Added", `**Role:** ${role}\n**Duration:** ${dur}`, SETTINGS.COLOR_SUCCESS)] });
+    }
+
+    if (sub === "remove") {
+        const role = interaction.options.getRole("role");
+        await supabase.from("role_rules").delete().eq("role_id", role.id);
+        return interaction.reply({ embeds: [createEmbed("🗑️ Rule Removed", `Deleted rule for ${role}.`, SETTINGS.COLOR_WARN)] });
+    }
+}
+
+/**
+ * Handles /checkalts command.
+ */
+async function handleCheckAlts(interaction) {
+    await interaction.deferReply();
+    const { data: all } = await supabase.from("verifications")
+        .select("*")
+        .eq("verified", true)
+        .gt("expires_at", new Date().toISOString());
+    
+    const map = new Map();
+    all.forEach(u => { 
+        if(u.discord_id) { 
+            if(!map.has(u.discord_id)) map.set(u.discord_id, []); 
+            map.get(u.discord_id).push(u); 
+        }
+    });
+    
+    const alts = Array.from(map.entries()).filter(([_, arr]) => arr.length > 1);
+    
+    if (alts.length === 0) return interaction.editReply({ embeds: [createEmbed("✅ No Alts Detected", "All active users are unique.", SETTINGS.COLOR_SUCCESS)] });
+
+    const desc = alts.map(([id, keys]) => {
+        return `<@${id}> **(${keys.length} Keys)**\n` + keys.map(k => `> 🔑 \`${k.code}\` | HWID: \`...${k.hwid.slice(-4)}\``).join("\n");
+    }).join("\n\n");
+
+    return interaction.editReply({ embeds: [createEmbed(`⚠️ Found ${alts.length} Multi-Key Users`, desc, SETTINGS.COLOR_WARN)] });
+}
+
+// =====================================================================
+// 🔑 SECTION 4: CORE VERIFICATION LOGIC (The Brain)
+// =====================================================================
+
+/**
+ * The main logic that processes verification.
+ * 1. Checks Maintenance & Links
+ * 2. Checks Poll Participation
+ * 3. Validates Key & Ban Status
+ * 4. Calculates Duration based on Roles (Punish vs Boost)
+ * 5. Logs Alt Activity to Webhook
+ * 6. Updates Database & Replies
+ */
+async function processVerification(user, codeInput, guild, replyCallback) {
+    if (SETTINGS.MAINTENANCE) return replyCallback({ content: "🚧 System Maintenance", ephemeral: true });
+
+    // 1. Sanitize Input
+    const code = codeInput.replace(/verify/gi, "").trim();
+
+    // 2. Database Checks
+    const { data: userData } = await supabase.from("verifications").select("*").eq("code", code).maybeSingle();
+    
+    if (!userData) return replyCallback({ embeds: [createEmbed("❌ Invalid Code", "This key does not exist.", SETTINGS.COLOR_ERROR)] });
+    if (userData.is_banned) return replyCallback({ embeds: [createEmbed("🚫 BANNED", "Your access has been revoked.", SETTINGS.COLOR_ERROR)] });
+
+    // 3. Link Check
+    const { data: link } = await supabase.from("roblox_links").select("*").eq("discord_id", user.id).maybeSingle();
+    // (Double check here for safety, though slash cmd handles it)
+    if (!link) {
+        return replyCallback({ embeds: [createEmbed("⚠️ Not Linked", "Please use `/verify` slash command to link your account first.", SETTINGS.COLOR_WARN)] });
+    }
+
+    // 4. Poll Punishment Check
+    let isPollPunished = false;
+    let pollUrl = "";
+    if (SETTINGS.POLL_LOCK) {
+        const { data: activePoll } = await supabase.from("polls").select("*").eq("is_active", true).order('created_at', { ascending: false }).limit(1).maybeSingle();
+        if (activePoll) {
+            const { data: vote } = await supabase.from("poll_votes").select("*").eq("poll_id", activePoll.id).eq("user_id", user.id).maybeSingle();
+            if (!vote) { 
+                isPollPunished = true; 
+                pollUrl = `https://discord.com/channels/${SETTINGS.GUILD_ID}/${activePoll.channel_id}`; 
+            }
+        }
+    }
+
+    // 5. Time Calculation (Smart Logic: Punish < Boost)
+    let finalDuration = SETTINGS.DEFAULT_VERIFY_MS;
+    let ruleName = "Default";
+    
+    try {
+        const member = await guild.members.fetch(user.id);
+        const { data: rules } = await supabase.from("role_rules").select("*");
+        
+        if (rules && rules.length > 0) {
+            let minPunish = null;
+            let maxBoost = null;
+
+            rules.forEach(r => {
+                if (member.roles.cache.has(r.role_id)) {
+                    const d = parseDuration(r.duration);
+                    
+                    // Logic: If role name contains "punish", treat as Penalty (Min Time)
+                    if (r.role_name.toLowerCase().includes("punish")) {
+                        if (minPunish === null || d < minPunish) { 
+                            minPunish = d; 
+                            ruleName = `⚖️ ${r.role_name} (Penalty)`; 
+                        }
+                    } else {
+                        // Else treat as Boost (Max Time)
+                        if (d === "LIFETIME") maxBoost = "LIFETIME";
+                        else if (maxBoost !== "LIFETIME" && d > (maxBoost || 0)) {
+                            maxBoost = d; 
+                            ruleName = `⭐ ${r.role_name}`;
+                        }
+                    }
+                }
+            });
+
+            // Punishment takes priority over Boost
+            if (minPunish !== null) finalDuration = minPunish;
+            else if (maxBoost !== null) finalDuration = maxBoost;
+        }
+    } catch(e) {}
+
+    // Apply Poll Penalty if applicable (Overrides everything)
+    if (isPollPunished) {
+        finalDuration = SETTINGS.DEFAULT_PUNISH_MS; 
+        ruleName = "⚠️ POLL PENALTY";
+    }
+
+    const expiryTime = finalDuration === "LIFETIME" 
+        ? new Date(Date.now() + 3153600000000).toISOString() 
+        : new Date(Date.now() + finalDuration).toISOString();
+
+    // 6. DETAILED ALT LOGGING
+    const { data: activeKeys } = await supabase.from("verifications").select("*").eq("discord_id", user.id).eq("verified", true);
+    
+    if (activeKeys && activeKeys.length > 0) {
+        // Find if this is a different key
+        const isNewKey = !activeKeys.some(k => k.code === code);
+        
+        if (isNewKey) {
+            const oldKeyInfo = activeKeys.map(k => `\`${k.code}\` (HWID: \`...${k.hwid.slice(-4)}\`)`).join(", ");
+            const rName = link ? link.roblox_username : "Unknown";
+            const rID = link ? link.roblox_id : "Unknown";
+
+            logToWebhook("⚠️ **Multi-Key Activity Detected**", 
+                `**User:** <@${user.id}> (${user.tag})\n` +
+                `**Roblox:** ${rName} (ID: \`${rID}\`)\n\n` +
+                `**Previous Key(s):** ${oldKeyInfo}\n` +
+                `**New Key:** \`${code}\` (HWID: \`...${userData.hwid.slice(-4)}\`)\n` +
+                `**Time:** <t:${Math.floor(Date.now()/1000)}:F>`,
+                SETTINGS.COLOR_WARN
+            );
+        }
+    }
+
+    // 7. Update DB
+    await supabase.from("verifications")
+        .update({ verified: true, expires_at: expiryTime, discord_id: user.id })
+        .eq("id", userData.id);
+
+    // 8. Success Message
+    const { data: conf } = await supabase.from("guild_config").select("verify_success_msg").eq("guild_id", guild.id).maybeSingle();
+    const customText = conf?.verify_success_msg ? `\n\n${conf.verify_success_msg}` : "";
+
+    const embed = createEmbed(
+        isPollPunished ? "⚠️ Verified (Restricted)" : "✅ Verification Successful", 
+        isPollPunished 
+            ? `**You missed a Poll!**\n[Vote Here](${pollUrl}) to remove restriction.\n\n*Penalty Applied.*`
+            : `**Access Granted!**\n\n**🔑 Key:** \`${code}\`\n**⏳ Duration:** ${formatTime(finalDuration)}\n**📜 Logic:** ${ruleName}\n**📅 Expires:** ${finalDuration==="LIFETIME"?"**Never**":`<t:${Math.floor(new Date(expiryTime).getTime()/1000)}:R>`}` + customText,
+        isPollPunished ? SETTINGS.COLOR_WARN : SETTINGS.COLOR_SUCCESS, 
+        user
+    );
+
+    // If linked, show Roblox ID in footer
+    if (link) embed.setFooter({ text: `Linked as: ${link.roblox_username} (${link.roblox_id})`, iconURL: SETTINGS.FOOTER_ICON });
+
+    return replyCallback({ embeds: [embed] });
+}
+
+// 🔥 NEW: Handle Key Update
+async function handleKeyUpdate(interaction) {
+    if (!await require("./config").isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Admin Only", ephemeral: true });
+
+    await interaction.deferReply();
+    const target = interaction.options.getString("target");
+    const newCode = interaction.options.getString("new_code");
+
+    // Search by all possible fields
+    const { data: record } = await supabase.from("verifications")
+        .select("*")
+        .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
+        .maybeSingle();
+
+    if (!record) return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `Target not found: \`${target}\``, SETTINGS.COLOR_ERROR)] });
+
+    await supabase.from("verifications").update({ code: newCode }).eq("id", record.id);
+
+    return interaction.editReply({ 
+        embeds: [createEmbed("✅ Key Updated", `**User:** <@${record.discord_id}>\n**Old Key:** \`${record.code}\`\n**New Key:** \`${newCode}\``, SETTINGS.COLOR_SUCCESS)] 
+    });
+}
+
+// 🌐 RE-EXPORTED FUNCTIONS FOR INDEX.JS COMPATIBILITY
+async function handleSetCode(interaction) {
+    const user = interaction.options.getUser("user");
+    const code = interaction.options.getString("code");
+    await supabase.from("verifications").upsert({ discord_id: user.id, code: code, verified: false, hwid: "RESET_ADMIN" }, { onConflict: 'discord_id' });
+    return interaction.reply({ embeds: [createEmbed("✅ Code Set", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
+}
+
+async function handleSetExpiry(interaction) {
+    await interaction.deferReply();
+    const target = interaction.options.getString("target");
+    const durationStr = interaction.options.getString("duration");
+    const note = interaction.options.getString("note") || null;
+    
+    const ms = parseDuration(durationStr);
+    if (!ms && durationStr !== 'lifetime') return interaction.editReply("❌ Invalid Duration");
+    
+    const exp = durationStr === 'lifetime' ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + ms).toISOString();
+    
+    const { error } = await supabase.from("verifications")
+        .update({ verified: true, expires_at: exp, admin_note: note })
+        .or(`code.eq.${target},hwid.eq.${target}`);
+        
+    if(error) return interaction.editReply("❌ Error updating.");
+    return interaction.editReply({ embeds: [createEmbed("✅ Expiry Updated", `Target: \`${target}\`\nNew Time: ${durationStr}`, SETTINGS.COLOR_SUCCESS)] });
+}
+
+async function handleActiveUsers(interaction, page = 1) {
+    const LIMIT = 10;
+    const offset = (page - 1) * LIMIT;
+    const replyMethod = interaction.message ? interaction.update.bind(interaction) : interaction.reply.bind(interaction);
+    
+    const { data: users, count } = await supabase.from("verifications")
+        .select("*", { count: 'exact' })
+        .eq("verified", true)
+        .gt("expires_at", new Date().toISOString())
+        .range(offset, offset + LIMIT - 1);
+
+    if (!users || users.length === 0) return replyMethod({ embeds: [createEmbed("🔴 Active Users", "No active users.", SETTINGS.COLOR_ERROR)] });
+
+    const list = users.map((u, i) => `**${offset + i + 1}.** <@${u.discord_id}>\n   └ 🔑 \`${u.code}\` | ⏳ <t:${Math.floor(new Date(u.expires_at).getTime()/1000)}:R>`).join("\n\n");
+    const totalPages = Math.ceil(count / LIMIT);
+    
+    const embed = createEmbed(`🟢 Active Users (${page}/${totalPages})`, list, SETTINGS.COLOR_SUCCESS);
+    
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`active_prev_${page-1}`).setLabel("◀").setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+        new ButtonBuilder().setCustomId(`active_next_${page+1}`).setLabel("▶").setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages)
+    );
+    
+    await replyMethod({ embeds: [embed], components: [row] });
+}
+
+// 📤 EXPORTS
+module.exports = { 
+    handleVerifyCommand, handleLinkButton, handleLinkModal, handleLinkConfirm,
+    handleSetNote, handleBanSystem, handleLookup, handleCheckAlts, handleRules,
+    processVerification, handleKeyUpdate, handleSetCode, handleSetExpiry, handleActiveUsers,
+    // Wrappers for Public GetID/Link to redirect to verify
+    handleGetRobloxId: async(i) => i.reply({ content: "⚠️ Use `/verify` to link automatically.", ephemeral: true }),
+    handleLinkRoblox: async(i) => i.reply({ content: "⚠️ Use `/verify` to link automatically.", ephemeral: true })
+};
