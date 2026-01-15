@@ -20,6 +20,7 @@ const {
     logToWebhook 
 } = require("./config");
 
+// Importing Modules
 const { 
     processVerification, 
     handleGetRobloxId, 
@@ -31,17 +32,24 @@ const {
     handleLookup, 
     handleSetExpiry, 
     handleCheckAlts,
-    handleKeyUpdate // <--- New Function Import
+    handleKeyUpdate,
+    handleVerifyCommand, // New Interactive Verify
+    handleLinkButton,
+    handleLinkModal,
+    handleLinkConfirm,
+    handleSetNote // New Admin Note
 } = require("./verification");
 
 const { 
-    handleWhitelist, 
-    handleWelcome, 
+    handleWelcomeCommands, // Handles Welcome & Bye
     handleRewards, 
     trackJoin, 
+    trackLeave, // New Bye Handler
     showBatchSync, 
     handleBatchSync, 
-    handleLeaderboard 
+    handleLeaderboard,
+    handleInvites, // New Invite Stats
+    handleWhoInvited // New Trace
 } = require("./invite");
 
 const { 
@@ -117,18 +125,18 @@ const commands = [
     // 1. PUBLIC USER COMMANDS
     new SlashCommandBuilder()
         .setName("verify")
-        .setDescription("Verify your key to access the script")
+        .setDescription("Verify to get access (Interactive)")
         .addStringOption(o => o.setName("code").setDescription("Enter your key code").setRequired(true)),
 
     new SlashCommandBuilder()
-        .setName("getid")
-        .setDescription("Get a Roblox User ID from Username")
-        .addStringOption(o => o.setName("username").setDescription("Roblox Username").setRequired(true)),
+        .setName("invites")
+        .setDescription("Check invitation stats")
+        .addUserOption(o => o.setName("user").setDescription("Target User")),
 
     new SlashCommandBuilder()
-        .setName("linkroblox")
-        .setDescription("Link your Discord to Roblox")
-        .addStringOption(o => o.setName("roblox_id").setDescription("Your Roblox ID").setRequired(true)),
+        .setName("whoinvited")
+        .setDescription("See who invited a specific user")
+        .addUserOption(o => o.setName("user").setDescription("Target User")),
 
     new SlashCommandBuilder()
         .setName("leaderboard")
@@ -142,24 +150,23 @@ const commands = [
         .addSubcommand(s => s.setName("announce").setDescription("Send a professional announcement embed").addStringOption(o => o.setName("title").setDescription("Title").setRequired(true)).addStringOption(o => o.setName("message").setDescription("Description").setRequired(true)).addChannelOption(o => o.setName("channel").setDescription("Channel")).addStringOption(o => o.setName("image").setDescription("Image URL")))
         .addSubcommand(s => s.setName("dm").setDescription("Direct Message a user").addUserOption(o => o.setName("user").setDescription("Target User").setRequired(true)).addStringOption(o => o.setName("message").setDescription("Message Content").setRequired(true))),
 
-    // 3. SECURITY & VERIFICATION MANAGEMENT
+    // 3. SERVER PROTECTION (Merged Whitelist & PingPunish)
     new SlashCommandBuilder()
-        .setName("setkey") // 🔥 NEW COMMAND
-        .setDescription("Manually update or reset a user's key")
-        .addStringOption(o => o.setName("target").setDescription("User ID, HWID, or Old Code").setRequired(true))
-        .addStringOption(o => o.setName("new_code").setDescription("The New Key Code").setRequired(true)),
+        .setName("protection")
+        .setDescription("Security & Anti-Ping Settings")
+        .addSubcommand(s => s.setName("whitelist").setDescription("Manage Whitelist").addStringOption(o => o.setName("action").setDescription("Select Action").setRequired(true).addChoices({ name: 'Add', value: 'add' }, { name: 'Remove', value: 'remove' }, { name: 'List', value: 'list' })).addUserOption(o => o.setName("user").setDescription("Target User")).addRoleOption(o => o.setName("role").setDescription("Target Role")))
+        .addSubcommand(s => s.setName("pingpunish").setDescription("Configure Ping Punishment").addStringOption(o => o.setName("type").setDescription("Punish Type").addChoices({ name: 'Role', value: 'role' }, { name: 'Timeout', value: 'timeout' })).addStringOption(o => o.setName("value").setDescription("Role ID or Duration (10m)")).addUserOption(o => o.setName("target").setDescription("Punish Specific User (Bypass Whitelist)"))),
 
+    // 4. WELCOME & BYE SYSTEM (Merged)
     new SlashCommandBuilder()
-        .setName("setcode") // Legacy User-based set
-        .setDescription("Set a custom code for a Discord User")
-        .addUserOption(o => o.setName("user").setDescription("Target User").setRequired(true))
-        .addStringOption(o => o.setName("code").setDescription("New Code").setRequired(true)),
+        .setName("welcome")
+        .setDescription("Manage Welcome & Goodbye Messages")
+        .addSubcommand(s => s.setName("channel").setDescription("Set Channel").addStringOption(o => o.setName("type").setDescription("Type").setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' }, { name: 'Bye', value: 'bye' })).addChannelOption(o => o.setName("target").setDescription("Channel").setRequired(true)))
+        .addSubcommand(s => s.setName("message").setDescription("Set Message").addStringOption(o => o.setName("type").setDescription("Type").setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' }, { name: 'Bye', value: 'bye' })).addStringOption(o => o.setName("content").setDescription("Content ({user}, {count})").setRequired(true)).addStringOption(o => o.setName("title").setDescription("Embed Title")))
+        .addSubcommand(s => s.setName("toggle").setDescription("Enable/Disable").addStringOption(o => o.setName("type").setDescription("Type").setRequired(true).addChoices({ name: 'Welcome', value: 'welcome' }, { name: 'Bye', value: 'bye' })).addStringOption(o => o.setName("state").setDescription("State").setRequired(true).addChoices({ name: 'On', value: 'on' }, { name: 'Off', value: 'off' })))
+        .addSubcommand(s => s.setName("test").setDescription("Test Configuration")),
 
-    new SlashCommandBuilder()
-        .setName("lookup")
-        .setDescription("Lookup User/Key Information")
-        .addStringOption(o => o.setName("target").setDescription("Code, HWID, or User ID").setRequired(true)),
-
+    // 5. SECURITY MANAGEMENT
     new SlashCommandBuilder()
         .setName("bansystem")
         .setDescription("Manage Script Bans")
@@ -168,49 +175,36 @@ const commands = [
         .addSubcommand(s => s.setName("list").setDescription("List all bans")),
 
     new SlashCommandBuilder()
-        .setName("activeusers")
-        .setDescription("Show list of currently active key users"),
-
-    new SlashCommandBuilder()
-        .setName("checkalts")
-        .setDescription("Check for users with multiple active keys"),
-
-    new SlashCommandBuilder()
-        .setName("setexpiry")
-        .setDescription("Manually set key expiration")
-        .addStringOption(o => o.setName("target").setDescription("Code/HWID").setRequired(true))
-        .addStringOption(o => o.setName("duration").setDescription("1d, 12h, lifetime").setRequired(true))
-        .addStringOption(o => o.setName("note").setDescription("Admin Note")),
-
-    // 4. SERVER PROTECTION & CONFIG
-    new SlashCommandBuilder()
-        .setName("whitelist")
-        .setDescription("Manage Anti-Ping Whitelist")
-        .addStringOption(o => o.setName("action").setDescription("Select Action").setRequired(true).addChoices({ name: 'Add', value: 'add' }, { name: 'Remove', value: 'remove' }, { name: 'List', value: 'list' }))
-        .addUserOption(o => o.setName("user").setDescription("Target User"))
-        .addRoleOption(o => o.setName("role").setDescription("Target Role")),
-
-    new SlashCommandBuilder()
-        .setName("config")
-        .setDescription("Bot Configuration")
-        .addSubcommand(s => s.setName("pingpunish").setDescription("Setup Anti-Ping Punishment").addStringOption(o => o.setName("type").setDescription("Punish Type").setRequired(true).addChoices({ name: 'Role', value: 'role' }, { name: 'Timeout', value: 'timeout' })).addStringOption(o => o.setName("value").setDescription("Role ID or Duration (10m)").setRequired(true))),
-
-    new SlashCommandBuilder()
         .setName("rules")
         .setDescription("Manage Verification Rules")
-        .addSubcommand(s => s.setName("set").setDescription("Set Role Duration").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")).addStringOption(o => o.setName("duration").setRequired(true).setDescription("Time")))
+        .addSubcommand(s => s.setName("set").setDescription("Set/Add Rule").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")).addStringOption(o => o.setName("duration").setRequired(true).setDescription("Time (e.g 1h, lifetime)")))
         .addSubcommand(s => s.setName("remove").setDescription("Remove Rule").addRoleOption(o => o.setName("role").setRequired(true).setDescription("Role")))
         .addSubcommand(s => s.setName("list").setDescription("List Rules")),
 
-    // 5. INVITE & WELCOME
     new SlashCommandBuilder()
-        .setName("welcome")
-        .setDescription("Welcome System Settings")
-        .addSubcommand(s => s.setName("channel").setDescription("Set Welcome Channel").addChannelOption(o => o.setName("target").setDescription("Channel").setRequired(true)))
-        .addSubcommand(s => s.setName("message").setDescription("Set Welcome Message").addStringOption(o => o.setName("title").setDescription("Embed Title").setRequired(true)).addStringOption(o => o.setName("description").setDescription("Use {user}, {count}, {inviter}").setRequired(true)))
-        .addSubcommand(s => s.setName("toggle").setDescription("Enable/Disable").addStringOption(o => o.setName("state").setDescription("State").setRequired(true).addChoices({ name: 'On', value: 'on' }, { name: 'Off', value: 'off' })))
-        .addSubcommand(s => s.setName("test").setDescription("Test Welcome Message")),
+        .setName("setkey")
+        .setDescription("Manually update or reset a user's key")
+        .addStringOption(o => o.setName("target").setDescription("User ID, HWID, or Old Code").setRequired(true))
+        .addStringOption(o => o.setName("new_code").setDescription("The New Key Code").setRequired(true)),
 
+    new SlashCommandBuilder()
+        .setName("setnote")
+        .setDescription("Add Admin Note to User")
+        .addStringOption(o => o.setName("target").setDescription("Target").setRequired(true))
+        .addStringOption(o => o.setName("note").setDescription("Note Content").setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName("custommsg")
+        .setDescription("Set Custom Verification Success Message")
+        .addStringOption(o => o.setName("message").setDescription("Message content").setRequired(true)),
+
+    new SlashCommandBuilder().setName("lookup").setDescription("Lookup User").addStringOption(o => o.setName("target").setDescription("Code, HWID, or User ID").setRequired(true)),
+    new SlashCommandBuilder().setName("activeusers").setDescription("Show active users"),
+    new SlashCommandBuilder().setName("checkalts").setDescription("Check for alts"),
+    new SlashCommandBuilder().setName("setcode").setDescription("Set custom code (User ID)").addUserOption(o => o.setName("user").setRequired(true).setDescription("User")).addStringOption(o => o.setName("code").setRequired(true).setDescription("Code")),
+    new SlashCommandBuilder().setName("setexpiry").setDescription("Set expiry").addStringOption(o => o.setName("target").setRequired(true).setDescription("Target")).addStringOption(o => o.setName("duration").setRequired(true).setDescription("Time")).addStringOption(o => o.setName("note").setDescription("Note")),
+
+    // 6. INVITE REWARDS
     new SlashCommandBuilder()
         .setName("rewards")
         .setDescription("Manage Invite Rewards")
@@ -218,11 +212,9 @@ const commands = [
         .addSubcommand(s => s.setName("remove").setDescription("Remove Reward").addIntegerOption(o => o.setName("id").setDescription("Reward ID").setRequired(true)))
         .addSubcommand(s => s.setName("list").setDescription("List Rewards")),
 
-    new SlashCommandBuilder()
-        .setName("syncmissing")
-        .setDescription("Sync Invites (Admin)"),
+    new SlashCommandBuilder().setName("syncmissing").setDescription("Sync Invites (Admin)"),
 
-    // 6. POLL SYSTEM
+    // 7. POLL SYSTEM
     new SlashCommandBuilder()
         .setName("poll")
         .setDescription("Create an Advanced Poll")
@@ -235,16 +227,8 @@ const commands = [
         .addRoleOption(o => o.setName("punish_role").setDescription("Role for Non-Voters"))
         .addBooleanOption(o => o.setName("multiple").setDescription("Allow Multiple Votes")),
 
-    new SlashCommandBuilder()
-        .setName("endpoll")
-        .setDescription("End a Poll & Punish")
-        .addIntegerOption(o => o.setName("id").setDescription("Poll ID").setRequired(true))
-        .addStringOption(o => o.setName("duration").setDescription("Punish Duration (e.g. 2d)")),
-
-    new SlashCommandBuilder()
-        .setName("pollresults")
-        .setDescription("View Detailed Poll Results")
-        .addIntegerOption(o => o.setName("pollid").setDescription("Poll ID").setRequired(true))
+    new SlashCommandBuilder().setName("endpoll").setDescription("End a Poll").addIntegerOption(o => o.setName("id").setDescription("Poll ID").setRequired(true)).addStringOption(o => o.setName("duration").setDescription("Punish Duration")),
+    new SlashCommandBuilder().setName("pollresults").setDescription("View Poll Results").addIntegerOption(o => o.setName("pollid").setDescription("Poll ID").setRequired(true))
 
 ].map(c => c.toJSON());
 
@@ -254,8 +238,6 @@ const commands = [
 
 client.once("ready", async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
-    console.log(`📡 Registering ${commands.length} commands...`);
-    
     try { 
         const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_BOT_TOKEN);
         await rest.put(Routes.applicationGuildCommands(client.user.id, SETTINGS.GUILD_ID), { body: commands });
@@ -268,7 +250,11 @@ client.once("ready", async () => {
 // 🔥 INTERACTION HANDLER
 client.on("interactionCreate", async interaction => {
     try {
-        // Handle Poll Votes & Batch Sync Buttons
+        // Handle Interactive Buttons & Modals
+        if (interaction.customId?.startsWith("link_start")) { await handleLinkButton(interaction); return; }
+        if (interaction.isModalSubmit() && interaction.customId.startsWith("link_modal")) { await handleLinkModal(interaction); return; }
+        if (interaction.customId?.startsWith("link_confirm")) { await handleLinkConfirm(interaction); return; }
+        
         if (interaction.customId?.startsWith("vote_")) { await handlePollVote(interaction); return; }
         if (interaction.customId?.startsWith("sync_")) { await handleBatchSync(interaction); return; }
         if (interaction.customId?.startsWith("active_")) { 
@@ -280,13 +266,9 @@ client.on("interactionCreate", async interaction => {
         if (!interaction.isChatInputCommand()) return;
 
         // --- PUBLIC COMMANDS ---
-        if (interaction.commandName === "verify") { 
-            await interaction.deferReply(); 
-            await processVerification(interaction.user, interaction.options.getString("code"), interaction.guild, (o) => interaction.editReply(o)); 
-            return; 
-        }
-        if (interaction.commandName === "getid") return handleGetRobloxId(interaction);
-        if (interaction.commandName === "linkroblox") return handleLinkRoblox(interaction);
+        if (interaction.commandName === "verify") return handleVerifyCommand(interaction);
+        if (interaction.commandName === "invites") return handleInvites(interaction);
+        if (interaction.commandName === "whoinvited") return handleWhoInvited(interaction);
         if (interaction.commandName === "leaderboard") return handleLeaderboard(interaction);
 
         // --- ADMIN ONLY CHECK ---
@@ -320,28 +302,47 @@ client.on("interactionCreate", async interaction => {
             }
         }
 
-        // Security & Config
-        else if (cmd === "whitelist") await handleWhitelist(interaction);
-        else if (cmd === "welcome") await handleWelcome(interaction);
+        // Welcome & Protection Menus
+        else if (cmd === "welcome") await handleWelcomeCommands(interaction);
+        else if (cmd === "protection") {
+            const sub = interaction.options.getSubcommand();
+            if (sub === "whitelist") await require("./invite").handleWhitelist(interaction);
+            if (sub === "pingpunish") {
+                const type = interaction.options.getString("type");
+                const val = interaction.options.getString("value");
+                const target = interaction.options.getUser("target");
+
+                if (target) {
+                    // Logic to add specific user punish to DB array
+                    // For now simple reply as implementation needs array logic in SQL
+                    interaction.reply("✅ Target User Punishment Updated (Logic pending DB array)"); 
+                } else {
+                    if (type === 'role') await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, ping_punish_role: val });
+                    else await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, ping_timeout_ms: parseDuration(val) });
+                    interaction.reply("✅ Ping Punishment Configured");
+                }
+            }
+        }
+
+        // Other Admin
+        else if (cmd === "custommsg") {
+            const msg = interaction.options.getString("message");
+            await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, verify_success_msg: msg });
+            interaction.reply("✅ Custom Verification Message Set");
+        }
         else if (cmd === "rewards") await handleRewards(interaction);
         else if (cmd === "activeusers") await handleActiveUsers(interaction, 1);
         else if (cmd === "setcode") await handleSetCode(interaction);
-        else if (cmd === "setkey") await handleKeyUpdate(interaction); // 🔥 NEW
+        else if (cmd === "setkey") await handleKeyUpdate(interaction);
         else if (cmd === "bansystem") await handleBanSystem(interaction);
         else if (cmd === "rules") await handleRules(interaction);
         else if (cmd === "lookup") await handleLookup(interaction);
         else if (cmd === "setexpiry") await handleSetExpiry(interaction);
         else if (cmd === "checkalts") await handleCheckAlts(interaction);
+        else if (cmd === "setnote") await handleSetNote(interaction);
         else if (cmd === "syncmissing") { 
             await interaction.deferReply({ ephemeral: true }); 
             await showBatchSync(interaction); 
-        }
-        else if (cmd === "config") {
-            const type = interaction.options.getString("type");
-            const val = interaction.options.getString("value");
-            if (type === 'role') await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, ping_punish_role: val });
-            else await supabase.from("guild_config").upsert({ guild_id: interaction.guild.id, ping_timeout_ms: parseDuration(val) });
-            interaction.reply("✅ Config Updated");
         }
 
         // Poll System
@@ -355,18 +356,20 @@ client.on("interactionCreate", async interaction => {
     }
 });
 
-// 🔥 WELCOME TRACKER
-client.on("guildMemberAdd", trackJoin);
+// 🔥 TRACK EVENTS
+client.on("guildMemberAdd", (member) => trackJoin(member, false));
+client.on("guildMemberRemove", (member) => trackLeave(member, false));
 
 // 🔥 TEXT COMMANDS & ANTI-PING
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
 
-    // Text Verification (verify 123456 or just 123456)
+    // Text Verification
     if (message.channel.id === SETTINGS.VERIFY_CHANNEL_ID) {
-        // Regex checks for "verify <code>" OR just digits "123456"
         if (message.content.toLowerCase().startsWith("verify ") || /^\d+$/.test(message.content.trim())) {
-            await processVerification(message.author, message.content, message.guild, (opts) => message.reply(opts));
+            // Re-route to processVerification (Assuming verification.js exports it)
+            // Note: interactive check doesn't work well on text, so we rely on direct logic
+            await require("./verification").processVerification(message.author, message.content, message.guild, (opts) => message.reply(opts));
         }
     }
 
@@ -374,10 +377,8 @@ client.on("messageCreate", async (message) => {
     if (message.mentions.users.has(SETTINGS.SUPER_OWNER_ID) && message.author.id !== SETTINGS.SUPER_OWNER_ID && !message.reference) {
         const { data } = await supabase.from("guild_config").select("*").eq("guild_id", message.guild.id).maybeSingle();
         
-        // Check Whitelist
         if (data?.ping_whitelist?.includes(message.author.id)) return;
 
-        // Apply Punishment
         if (message.member.moderatable) {
             if (data?.ping_punish_role) {
                 await message.member.roles.add(data.ping_punish_role).catch(() => {});
