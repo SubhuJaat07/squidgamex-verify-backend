@@ -541,9 +541,38 @@ async function processVerification(user, codeInput, guild, replyCallback) {
     return replyCallback({ embeds: [embed] });
 }
 
-// =====================================================================
-// 📤 EXPORTS
-// =====================================================================
+// ... (ऊपर बाकी सारे फंक्शन्स होंगे: processVerification, handleSetCode, आदि)
+
+// 🔥 NEW: Handle Key Update by HWID/Old Key
+async function handleKeyUpdate(interaction) {
+    // Admin check
+    if (!await require("./config").isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Admin Only", ephemeral: true });
+
+    await interaction.deferReply();
+    const target = interaction.options.getString("target");
+    const newCode = interaction.options.getString("new_code");
+
+    // Search by Code, HWID, or Discord ID
+    const { data: record } = await supabase.from("verifications")
+        .select("*")
+        .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
+        .maybeSingle();
+
+    if (!record) {
+        return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `No user found with Target: \`${target}\``, SETTINGS.COLOR_ERROR)] });
+    }
+
+    // Update Code
+    await supabase.from("verifications")
+        .update({ code: newCode })
+        .eq("id", record.id);
+
+    return interaction.editReply({ 
+        embeds: [createEmbed("✅ Key Updated Successfully", `**Target:** \`${target}\`\n**Old Key:** \`${record.code}\`\n**New Key:** \`${newCode}\`\n**User:** <@${record.discord_id}>`, SETTINGS.COLOR_SUCCESS)] 
+    });
+}
+
+// 📤 EXPORTS (इसे रिप्लेस कर दें)
 module.exports = { 
     processVerification, 
     handleGetRobloxId, 
@@ -553,6 +582,7 @@ module.exports = {
     handleBanSystem, 
     handleRules, 
     handleLookup, 
-    handleSetExpiry,
-    handleCheckAlts 
+    handleSetExpiry, 
+    handleCheckAlts, 
+    handleKeyUpdate // <--- यह नया जुड़ गया है
 };
