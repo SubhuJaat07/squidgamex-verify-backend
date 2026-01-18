@@ -18,70 +18,45 @@ const {
 } = require("discord.js");
 
 // =====================================================================
-// 🌐 SECTION 1: INTERACTIVE VERIFICATION FLOW
+// 🌐 SECTION 1: SMART VERIFICATION FLOW
 // =====================================================================
 
 /**
- * Handles the initial /verify command.
- * If user is linked -> Verifies directly.
- * If NOT linked -> Shows a button to start linking process.
+ * Handles the /verify command (Slash)
  */
 async function handleVerifyCommand(interaction) {
+    await interaction.deferReply();
     const code = interaction.options.getString("code");
     
-    // 1. Check if user is already linked
-    const { data: link } = await supabase.from("roblox_links")
-        .select("*")
-        .eq("discord_id", interaction.user.id)
-        .maybeSingle();
-    
-    // 2. If NOT linked, show the interactive button
-    if (!link) {
-        const embed = createEmbed(
-            "⚠️ Account Not Linked", 
-            "To verify, you must first link your Roblox account.\nClick the button below to start the process.", 
-            SETTINGS.COLOR_WARN
-        );
-
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`link_start_${code}`) // Pass code to next step
-                .setLabel("🔗 Link Roblox Account")
-                .setStyle(ButtonStyle.Primary)
-        );
-
-        return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-    }
-
-    // 3. If Linked, proceed to verification immediately
-    await processVerification(interaction.user, code, interaction.guild, (opts) => interaction.reply(opts));
+    // Pass editReply because we deferred
+    await processVerification(interaction.user, code, interaction.guild, (opts) => interaction.editReply(opts), interaction);
 }
 
 /**
- * Step 2: Opens the Modal for Roblox Username input.
- * Triggered by the "Link Roblox Account" button.
+ * Handles "Link Roblox" Button Click -> Opens Modal
  */
 async function handleLinkButton(interaction) {
-    const code = interaction.customId.split('_')[2]; // Retrieve code from button ID
+    const code = interaction.customId.split('_')[2]; 
 
     const modal = new ModalBuilder()
         .setCustomId(`link_modal_${code}`)
-        .setTitle("Link Roblox Account");
+        .setTitle("🔗 Link Roblox Account");
 
     const usernameInput = new TextInputBuilder()
         .setCustomId("r_username")
-        .setLabel("Enter your Roblox Username")
+        .setLabel("Enter Roblox Username")
+        .setPlaceholder("e.g. RobloxPlayer123")
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
 
-    const firstActionRow = new ActionRowBuilder().addComponents(usernameInput);
-    modal.addComponents(firstActionRow);
+    const row = new ActionRowBuilder().addComponents(usernameInput);
+    modal.addComponents(row);
 
     await interaction.showModal(modal);
 }
 
 /**
- * Step 3: Handles Modal Submit -> Fetches Roblox Info -> Shows Confirmation.
+ * Handles Modal Submit -> Fetches Profile -> Asks Confirmation
  */
 async function handleLinkModal(interaction) {
     await interaction.deferReply({ ephemeral: true });
@@ -90,7 +65,7 @@ async function handleLinkModal(interaction) {
     const code = interaction.customId.split('_')[2]; 
 
     try {
-        // Fetch User ID from Roblox
+        // Fetch User from Roblox API
         const response = await fetch(SETTINGS.ROBLOX_API, { 
             method: 'POST', 
             headers: {'Content-Type': 'application/json'}, 
@@ -104,171 +79,134 @@ async function handleLinkModal(interaction) {
         
         if (!json.data || json.data.length === 0) {
             return interaction.editReply({ 
-                embeds: [createEmbed("❌ User Not Found", `Could not find Roblox user: **${username}**`, SETTINGS.COLOR_ERROR)] 
+                embeds: [createEmbed("❌ User Not Found", `Could not find any Roblox user named **${username}**`, SETTINGS.COLOR_ERROR)] 
             });
         }
         
         const rUser = json.data[0];
-        
-        // Fetch Thumbnail for visual confirmation
-        let avatarUrl = "";
-        try {
-            const thumbRes = await fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${rUser.id}&size=150x150&format=Png&isCircular=false`);
-            const thumbJson = await thumbRes.json();
-            if (thumbJson.data && thumbJson.data.length > 0) {
-                avatarUrl = thumbJson.data[0].imageUrl;
-            }
-        } catch (e) {
-            console.error("Thumbnail Fetch Error:", e);
-        }
+        const avatarUrl = `https://www.roblox.com/headshot-thumbnail/image?userId=${rUser.id}&width=420&height=420&format=png`;
 
-        // Show Confirmation Embed
-        const embed = createEmbed("👤 Confirm Identity", `Is this your Roblox account?\n\n**Username:** ${rUser.name}\n**ID:** \`${rUser.id}\``, SETTINGS.COLOR_INFO);
-        if (avatarUrl) embed.setThumbnail(avatarUrl);
+        const embed = createEmbed("👤 Confirm Identity", `Is this your Roblox account?`, SETTINGS.COLOR_INFO)
+            .addFields(
+                { name: "📛 Username", value: `\`${rUser.name}\``, inline: true },
+                { name: "🆔 Roblox ID", value: `\`${rUser.id}\``, inline: true }
+            )
+            .setThumbnail(avatarUrl);
         
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`link_confirm_${rUser.id}_${rUser.name}_${code}`)
-                .setLabel("✅ Yes, Link & Verify")
-                .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-                .setCustomId("link_cancel")
-                .setLabel("❌ No, Wrong Account")
-                .setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`link_confirm_${rUser.id}_${rUser.name}_${code}`).setLabel("✅ Yes, This is me").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId("link_cancel").setLabel("❌ No, Wrong Account").setStyle(ButtonStyle.Secondary)
         );
 
         await interaction.editReply({ embeds: [embed], components: [row] });
 
-    } catch (e) { 
+    } catch(e) { 
         console.error("API Error:", e);
-        interaction.editReply({ content: "❌ **API Error:** Failed to contact Roblox API." }); 
+        interaction.editReply({ content: "❌ **Roblox API Error:** Failed to fetch user data." }); 
     }
 }
 
 /**
- * Step 4: Final Confirmation -> Save to DB -> Run Verification.
+ * Handles the "Yes/No" Confirmation
  */
 async function handleLinkConfirm(interaction) {
+    // FIX: Handle "No" properly to avoid interaction error
     if (interaction.customId === "link_cancel") {
-        return interaction.update({ content: "❌ Process Cancelled.", embeds: [], components: [] });
+        return interaction.update({ 
+            content: "❌ **Verification Cancelled.** You can try again with the correct username.", 
+            embeds: [], 
+            components: [] 
+        });
     }
 
     await interaction.deferUpdate();
     
-    // Extract data from Custom ID: link_confirm_ID_NAME_CODE
     const parts = interaction.customId.split('_');
     const rId = parts[2];
     const rName = parts[3];
     const code = parts[4];
 
-    // 1. Check if Roblox ID is already linked to ANOTHER Discord account (Alt Protection)
+    // Check for Alt Account (Is this Roblox ID linked to someone else?)
     const { data: existing } = await supabase.from("roblox_links")
         .select("discord_id")
         .eq("roblox_id", rId)
         .maybeSingle();
 
     if (existing && existing.discord_id !== interaction.user.id) {
-        // Log this attempt
-        await logToWebhook(
-            "⚠️ **Alt Link Attempt Detected**", 
-            `**User:** <@${interaction.user.id}> tried to link Roblox ID \`${rId}\` (${rName}).\n**Status:** This Roblox ID is already linked to <@${existing.discord_id}>.\n**Action:** Link Overwritten.`
+        logToWebhook(
+            "⚠️ **Alt Link Detected**", 
+            `**User:** <@${interaction.user.id}> (${interaction.user.tag})\n` +
+            `**Action:** Linked Roblox ID \`${rId}\` (${rName})\n` +
+            `**Conflict:** This ID was previously linked to <@${existing.discord_id}>. Link has been overwritten.`
         );
     }
 
-    // 2. Save/Update Link
+    // Save Link
     await supabase.from("roblox_links").upsert({ 
         discord_id: interaction.user.id, 
         roblox_id: rId, 
         roblox_username: rName 
     }, { onConflict: 'discord_id' });
 
-    // 3. Trigger Verification Process
-    await processVerification(interaction.user, code, interaction.guild, (opts) => interaction.editReply(opts));
+    // Proceed to Verification
+    // We pass 'interaction.message.edit' context effectively via editReply since we are in a button flow
+    await processVerification(interaction.user, code, interaction.guild, (opts) => interaction.editReply(opts), interaction);
 }
 
 // =====================================================================
-// 🛡️ SECTION 2: ADMIN & SECURITY COMMANDS
+// 🛡️ SECTION 2: ADMIN & SECURITY
 // =====================================================================
 
-/**
- * Admin: Add a note to a user's verification record.
- * Usage: /setnote <target> <note>
- */
 async function handleSetNote(interaction) {
-    // Admin check is done in index.js, but safe to keep here too
     if (!await require("./config").isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Admin Only", ephemeral: true });
 
     const target = interaction.options.getString("target");
     const note = interaction.options.getString("note");
 
-    // Find User
     const { data: user } = await supabase.from("verifications")
         .select("id, discord_id")
         .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
         .maybeSingle();
 
-    if (!user) {
-        return interaction.reply({ content: `❌ **Error:** No user found for target \`${target}\`.`, ephemeral: true });
-    }
+    if (!user) return interaction.reply({ content: `❌ **Error:** No user found for target \`${target}\`.`, ephemeral: true });
 
-    // Update Note
     await supabase.from("verifications").update({ admin_note: note }).eq("id", user.id);
     
     return interaction.reply({ 
-        embeds: [createEmbed("✅ Note Updated", `**Target:** <@${user.discord_id}>\n**Note:** ${note}`, SETTINGS.COLOR_SUCCESS)] 
+        embeds: [createEmbed("✅ Note Saved", `**Target:** <@${user.discord_id}>\n**Note:** ${note}`, SETTINGS.COLOR_SUCCESS)] 
     });
 }
 
-/**
- * Admin: Ban or Unban a user from using the script.
- * Usage: /bansystem <ban/unban/list> <target>
- */
 async function handleBanSystem(interaction) {
     const sub = interaction.options.getSubcommand();
     const target = interaction.options.getString("target");
-    
-    // Look up user first to confirm existence
-    if (sub !== 'list') {
-        const { data: user } = await supabase.from("verifications")
-            .select("*")
-            .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
-            .maybeSingle();
-        
-        if (!user) {
-            return interaction.reply({ content: `❌ **User Not Found:** Could not find any record for \`${target}\`.`, ephemeral: true });
-        }
 
-        if (sub === "ban") {
-            await supabase.from("verifications").update({ is_banned: true, verified: false }).eq("id", user.id);
-            return interaction.reply({ 
-                embeds: [createEmbed("🚫 User Banned", `**Target:** \`${target}\`\n**Status:** Permanently Banned`, SETTINGS.COLOR_ERROR)] 
-            });
-        }
-        
-        if (sub === "unban") {
-            await supabase.from("verifications").update({ is_banned: false }).eq("id", user.id);
-            return interaction.reply({ 
-                embeds: [createEmbed("✅ User Unbanned", `**Target:** \`${target}\`\n**Status:** Access Restored`, SETTINGS.COLOR_SUCCESS)] 
-            });
-        }
+    if (sub === 'list') {
+        await interaction.deferReply();
+        const { data } = await supabase.from("verifications").select("*").eq("is_banned", true);
+        const list = data && data.length > 0 ? data.map(u => `\`${u.code}\` (HWID: ${u.hwid})`).join("\n") : "No active bans.";
+        return interaction.editReply({ embeds: [createEmbed("📜 Banned Users", list, SETTINGS.COLOR_WARN)] });
     }
 
-    if (sub === "list") {
-        const { data } = await supabase.from("verifications").select("*").eq("is_banned", true);
-        
-        let description = "No active bans.";
-        if (data && data.length > 0) {
-            description = data.map((u, i) => `**${i+1}.** Code: \`${u.code}\` | HWID: \`...${u.hwid.slice(-4)}\``).join("\n");
-        }
-        
-        return interaction.reply({ embeds: [createEmbed("📜 Ban List", description, SETTINGS.COLOR_WARN)] });
+    // Lookup user first
+    const { data: user } = await supabase.from("verifications")
+        .select("*")
+        .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
+        .maybeSingle();
+    
+    if (!user) return interaction.reply({ content: "❌ **User Not Found.** Check the Code/HWID/ID.", ephemeral: true });
+
+    if (sub === "ban") {
+        await supabase.from("verifications").update({ is_banned: true, verified: false }).eq("id", user.id);
+        return interaction.reply({ embeds: [createEmbed("🚫 User Banned", `**Target:** \`${target}\`\n**Action:** Access Revoked Permanently.`, SETTINGS.COLOR_ERROR)] });
+    }
+    
+    if (sub === "unban") {
+        await supabase.from("verifications").update({ is_banned: false }).eq("id", user.id);
+        return interaction.reply({ embeds: [createEmbed("✅ User Unbanned", `**Target:** \`${target}\`\n**Action:** Access Restored.`, SETTINGS.COLOR_SUCCESS)] });
     }
 }
 
-/**
- * Admin: Lookup detailed info about a user/key.
- * Shows Roblox ID, Discord, Key, HWID, and Expiry.
- */
 async function handleLookup(interaction) {
     await interaction.deferReply();
     const target = interaction.options.getString("target");
@@ -278,37 +216,38 @@ async function handleLookup(interaction) {
         .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
         .maybeSingle();
     
-    if (!data) {
-        return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `No data found for \`${target}\``, SETTINGS.COLOR_ERROR)] });
-    }
+    if (!data) return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `No records for \`${target}\``, SETTINGS.COLOR_ERROR)] });
 
     // Fetch Linked Roblox Data
     const { data: rLink } = await supabase.from("roblox_links").select("*").eq("discord_id", data.discord_id).maybeSingle();
     
     // Status Logic
     const isExpired = data.expires_at && new Date(data.expires_at) < new Date();
-    let statusText = "🟢 **ACTIVE**";
-    let color = SETTINGS.COLOR_SUCCESS;
+    const status = data.is_banned ? "🚫 **BANNED**" : (isExpired ? "🔴 **EXPIRED**" : "🟢 **ACTIVE**");
+    const color = data.is_banned ? SETTINGS.COLOR_ERROR : (status.includes("ACTIVE") ? SETTINGS.COLOR_SUCCESS : SETTINGS.COLOR_WARN);
 
-    if (data.is_banned) { statusText = "🚫 **BANNED**"; color = SETTINGS.COLOR_ERROR; }
-    else if (isExpired) { statusText = "🔴 **EXPIRED**"; color = SETTINGS.COLOR_WARN; }
-
-    // Fetch Discord User Object
+    // Fetch Discord Info
     let discordUser = null;
-    try { 
-        if (data.discord_id) discordUser = await interaction.client.users.fetch(data.discord_id); 
-    } catch(e){}
+    try { if (data.discord_id) discordUser = await interaction.client.users.fetch(data.discord_id); } catch(e){}
 
-    const embed = createEmbed("🔍 User Lookup", "", color, discordUser)
-        .addFields(
-            { name: "👤 Discord", value: data.discord_id ? `<@${data.discord_id}>` : "`Unlinked`", inline: true },
-            { name: "🎮 Roblox", value: rLink ? `[${rLink.roblox_username}](https://www.roblox.com/users/${rLink.roblox_id}/profile)` : "`Unlinked`", inline: true },
-            { name: "🔑 License Key", value: `\`${data.code}\``, inline: true },
-            { name: "📝 Admin Note", value: data.admin_note || "`None`", inline: true },
-            { name: "📡 Status", value: statusText, inline: true },
-            { name: "🖥️ HWID", value: `\`${data.hwid}\``, inline: false },
-            { name: "⏳ Expiry", value: data.expires_at ? `<t:${Math.floor(new Date(data.expires_at).getTime()/1000)}:F>` : "`Never`", inline: true }
-        );
+    // Create Embed
+    const embed = createEmbed("🔍 User Information", "", color, discordUser);
+    
+    // Fetch Roblox Avatar if linked
+    if (rLink) {
+        embed.setThumbnail(`https://www.roblox.com/headshot-thumbnail/image?userId=${rLink.roblox_id}&width=420&height=420&format=png`);
+    }
+
+    embed.addFields(
+        { name: "👤 Discord", value: data.discord_id ? `<@${data.discord_id}>\n\`${data.discord_id}\`` : "`Unlinked`", inline: true },
+        { name: "🎮 Roblox", value: rLink ? `[${rLink.roblox_username}](https://www.roblox.com/users/${rLink.roblox_id}/profile)\nID: \`${rLink.roblox_id}\`` : "`Unlinked`", inline: true },
+        { name: "\u200b", value: "\u200b", inline: false },
+        { name: "🔑 License Key", value: `\`${data.code}\``, inline: true },
+        { name: "📝 Admin Note", value: data.admin_note ? `\`${data.admin_note}\`` : "`None`", inline: true },
+        { name: "📡 Status", value: status, inline: true },
+        { name: "🖥️ Hardware ID", value: `\`${data.hwid}\``, inline: false }, // FULL HWID SHOWN
+        { name: "⏳ Expiry", value: data.expires_at ? `<t:${Math.floor(new Date(data.expires_at).getTime()/1000)}:F> (<t:${Math.floor(new Date(data.expires_at).getTime()/1000)}:R>)` : "`N/A`", inline: false }
+    );
 
     return interaction.editReply({ embeds: [embed] });
 }
@@ -317,49 +256,34 @@ async function handleLookup(interaction) {
 // ⚙️ SECTION 3: RULES & CONFIGURATION
 // =====================================================================
 
-/**
- * Handles /rules command (add/remove/list).
- */
 async function handleRules(interaction) {
     const sub = interaction.options.getSubcommand();
     
     if (sub === "list") {
         const { data } = await supabase.from("role_rules").select("*");
-        if (!data || data.length === 0) return interaction.reply({ embeds: [createEmbed("📜 Verification Rules", "No rules configured.", SETTINGS.COLOR_WARN)] });
-
-        const list = data.map((r, i) => `**${i+1}.** <@&${r.role_id}>\n   └ ⏳ Duration: **${r.duration}**`).join("\n");
+        const list = data && data.length > 0 
+            ? data.map((r, i) => `**${i+1}.** <@&${r.role_id}> ➜ **${r.duration}**`).join("\n") 
+            : "No custom rules set.";
         return interaction.reply({ embeds: [createEmbed("📜 Verification Rules", list, SETTINGS.COLOR_INFO)] });
     }
 
     if (sub === "add" || sub === "set") {
         const role = interaction.options.getRole("role");
         const dur = interaction.options.getString("duration");
-        
-        await supabase.from("role_rules").upsert({ 
-            role_id: role.id, 
-            role_name: role.name, 
-            duration: dur 
-        }, { onConflict: 'role_id' });
-
-        return interaction.reply({ embeds: [createEmbed("✅ Rule Added", `**Role:** ${role}\n**Duration:** ${dur}`, SETTINGS.COLOR_SUCCESS)] });
+        await supabase.from("role_rules").upsert({ role_id: role.id, role_name: role.name, duration: dur }, { onConflict: 'role_id' });
+        return interaction.reply({ embeds: [createEmbed("✅ Rule Configured", `**Role:** ${role}\n**Duration:** \`${dur}\``, SETTINGS.COLOR_SUCCESS)] });
     }
 
     if (sub === "remove") {
         const role = interaction.options.getRole("role");
         await supabase.from("role_rules").delete().eq("role_id", role.id);
-        return interaction.reply({ embeds: [createEmbed("🗑️ Rule Removed", `Deleted rule for ${role}.`, SETTINGS.COLOR_WARN)] });
+        return interaction.reply({ embeds: [createEmbed("🗑️ Rule Removed", `Removed configuration for ${role}.`, SETTINGS.COLOR_WARN)] });
     }
 }
 
-/**
- * Handles /checkalts command.
- */
 async function handleCheckAlts(interaction) {
     await interaction.deferReply();
-    const { data: all } = await supabase.from("verifications")
-        .select("*")
-        .eq("verified", true)
-        .gt("expires_at", new Date().toISOString());
+    const { data: all } = await supabase.from("verifications").select("*").eq("verified", true).gt("expires_at", new Date().toISOString());
     
     const map = new Map();
     all.forEach(u => { 
@@ -371,13 +295,13 @@ async function handleCheckAlts(interaction) {
     
     const alts = Array.from(map.entries()).filter(([_, arr]) => arr.length > 1);
     
-    if (alts.length === 0) return interaction.editReply({ embeds: [createEmbed("✅ No Alts Detected", "All active users are unique.", SETTINGS.COLOR_SUCCESS)] });
+    if (alts.length === 0) return interaction.editReply({ embeds: [createEmbed("✅ Clean", "No users found with multiple active keys.", SETTINGS.COLOR_SUCCESS)] });
 
     const desc = alts.map(([id, keys]) => {
-        return `<@${id}> **(${keys.length} Keys)**\n` + keys.map(k => `> 🔑 \`${k.code}\` | HWID: \`...${k.hwid.slice(-4)}\``).join("\n");
+        return `<@${id}> **(${keys.length} Keys)**\n` + keys.map(k => `> 🔑 \`${k.code}\` | HWID: \`${k.hwid}\``).join("\n");
     }).join("\n\n");
 
-    return interaction.editReply({ embeds: [createEmbed(`⚠️ Found ${alts.length} Multi-Key Users`, desc, SETTINGS.COLOR_WARN)] });
+    return interaction.editReply({ embeds: [createEmbed(`⚠️ Detected ${alts.length} Multi-Key Users`, desc, SETTINGS.COLOR_WARN)] });
 }
 
 // =====================================================================
@@ -385,34 +309,76 @@ async function handleCheckAlts(interaction) {
 // =====================================================================
 
 /**
- * The main logic that processes verification.
- * 1. Checks Maintenance & Links
- * 2. Checks Poll Participation
- * 3. Validates Key & Ban Status
- * 4. Calculates Duration based on Roles (Punish vs Boost)
- * 5. Logs Alt Activity to Webhook
- * 6. Updates Database & Replies
+ * Main Logic.
+ * 1. Validates Code & Maintenance.
+ * 2. Checks DB for Auto-Detected Roblox ID (New Feature).
+ * 3. Handles Link Mismatch Logic (Webhook Logs).
+ * 4. Applies Rules (Punish vs Boost).
+ * 5. Success Message.
  */
-async function processVerification(user, codeInput, guild, replyCallback) {
-    if (SETTINGS.MAINTENANCE) return replyCallback({ content: "🚧 System Maintenance", ephemeral: true });
+async function processVerification(user, codeInput, guild, replyCallback, originalInteraction = null) {
+    if (SETTINGS.MAINTENANCE) return replyCallback({ content: "🚧 **System Maintenance Mode**", ephemeral: true });
 
-    // 1. Sanitize Input
     const code = codeInput.replace(/verify/gi, "").trim();
 
-    // 2. Database Checks
+    // 1. Get Key Data
     const { data: userData } = await supabase.from("verifications").select("*").eq("code", code).maybeSingle();
     
-    if (!userData) return replyCallback({ embeds: [createEmbed("❌ Invalid Code", "This key does not exist.", SETTINGS.COLOR_ERROR)] });
-    if (userData.is_banned) return replyCallback({ embeds: [createEmbed("🚫 BANNED", "Your access has been revoked.", SETTINGS.COLOR_ERROR)] });
+    if (!userData) return replyCallback({ embeds: [createEmbed("❌ Invalid Code", "This key does not exist or has been deleted.", SETTINGS.COLOR_ERROR)] });
+    if (userData.is_banned) return replyCallback({ embeds: [createEmbed("🚫 BANNED", "This key is blacklisted. Access Denied.", SETTINGS.COLOR_ERROR)] });
 
-    // 3. Link Check
-    const { data: link } = await supabase.from("roblox_links").select("*").eq("discord_id", user.id).maybeSingle();
-    // (Double check here for safety, though slash cmd handles it)
-    if (!link) {
-        return replyCallback({ embeds: [createEmbed("⚠️ Not Linked", "Please use `/verify` slash command to link your account first.", SETTINGS.COLOR_WARN)] });
+    // 2. Fetch User Link
+    let { data: link } = await supabase.from("roblox_links").select("*").eq("discord_id", user.id).maybeSingle();
+
+    // ---------------------------------------------------------
+    // 🔥 NEW FEATURE: AUTO-DETECT ROBLOX ID FROM SCRIPT EXECUTION
+    // ---------------------------------------------------------
+    // If the Lua script sent the Roblox ID during /check, it's in userData.executed_roblox_id
+    if (userData.executed_roblox_id && !link) {
+        // If user is NOT linked, but script sent an ID -> Ask if this is them
+        const rID = userData.executed_roblox_id;
+        const rName = userData.executed_roblox_username || "Unknown";
+        
+        const avatarUrl = `https://www.roblox.com/headshot-thumbnail/image?userId=${rID}&width=420&height=420&format=png`;
+
+        const embed = createEmbed("👋 Welcome!", `The script detected you are playing as:\n\n**${rName}**\nID: \`${rID}\`\n\nIs this your account? Click **Yes** to link and verify instantly.`, SETTINGS.COLOR_INFO)
+            .setThumbnail(avatarUrl);
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`link_confirm_${rID}_${rName}_${code}`).setLabel("✅ Yes, This is me").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`link_start_${code}`).setLabel("✏️ No, Enter Manually").setStyle(ButtonStyle.Secondary)
+        );
+
+        // If we have an original interaction (Slash), use it. For text, we reply normally.
+        return replyCallback({ embeds: [embed], components: [row] });
     }
 
-    // 4. Poll Punishment Check
+    // If still not linked after Auto-Detect check, Force Link
+    if (!link) {
+        const embed = createEmbed("⚠️ Verification Required", "You must link your Roblox account to verify.\nClick below to start.", SETTINGS.COLOR_WARN);
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`link_start_${code}`).setLabel("🔗 Link Roblox Account").setStyle(ButtonStyle.Primary)
+        );
+        return replyCallback({ embeds: [embed], components: [row] });
+    }
+
+    // ---------------------------------------------------------
+    // 🕵️ SECURITY LOG: EXECUTOR MISMATCH
+    // ---------------------------------------------------------
+    // If Script Executed by User A, but Linked Account is User B
+    if (userData.executed_roblox_id && userData.executed_roblox_id !== link.roblox_id) {
+        logToWebhook(
+            "⚠️ **Suspicious Verification**",
+            `**User:** <@${user.id}>\n` +
+            `**Linked Account:** ${link.roblox_username} (\`${link.roblox_id}\`)\n` +
+            `**Script Executor:** ${userData.executed_roblox_username} (\`${userData.executed_roblox_id}\`)\n` +
+            `**Key:** \`${code}\`\n` + 
+            `**Status:** Mismatch detected but allowed.`,
+            SETTINGS.COLOR_WARN
+        );
+    }
+
+    // 3. Poll Punishment Check
     let isPollPunished = false;
     let pollUrl = "";
     if (SETTINGS.POLL_LOCK) {
@@ -426,7 +392,7 @@ async function processVerification(user, codeInput, guild, replyCallback) {
         }
     }
 
-    // 5. Time Calculation (Smart Logic: Punish < Boost)
+    // 4. Calculate Duration
     let finalDuration = SETTINGS.DEFAULT_VERIFY_MS;
     let ruleName = "Default";
     
@@ -441,15 +407,14 @@ async function processVerification(user, codeInput, guild, replyCallback) {
             rules.forEach(r => {
                 if (member.roles.cache.has(r.role_id)) {
                     const d = parseDuration(r.duration);
-                    
-                    // Logic: If role name contains "punish", treat as Penalty (Min Time)
+                    // "Punish" keyword = Penalty
                     if (r.role_name.toLowerCase().includes("punish")) {
                         if (minPunish === null || d < minPunish) { 
                             minPunish = d; 
                             ruleName = `⚖️ ${r.role_name} (Penalty)`; 
                         }
                     } else {
-                        // Else treat as Boost (Max Time)
+                        // Boost
                         if (d === "LIFETIME") maxBoost = "LIFETIME";
                         else if (maxBoost !== "LIFETIME" && d > (maxBoost || 0)) {
                             maxBoost = d; 
@@ -459,13 +424,11 @@ async function processVerification(user, codeInput, guild, replyCallback) {
                 }
             });
 
-            // Punishment takes priority over Boost
             if (minPunish !== null) finalDuration = minPunish;
             else if (maxBoost !== null) finalDuration = maxBoost;
         }
     } catch(e) {}
 
-    // Apply Poll Penalty if applicable (Overrides everything)
     if (isPollPunished) {
         finalDuration = SETTINGS.DEFAULT_PUNISH_MS; 
         ruleName = "⚠️ POLL PENALTY";
@@ -475,82 +438,50 @@ async function processVerification(user, codeInput, guild, replyCallback) {
         ? new Date(Date.now() + 3153600000000).toISOString() 
         : new Date(Date.now() + finalDuration).toISOString();
 
-    // 6. DETAILED ALT LOGGING
-    const { data: activeKeys } = await supabase.from("verifications").select("*").eq("discord_id", user.id).eq("verified", true);
-    
-    if (activeKeys && activeKeys.length > 0) {
-        // Find if this is a different key
-        const isNewKey = !activeKeys.some(k => k.code === code);
-        
-        if (isNewKey) {
-            const oldKeyInfo = activeKeys.map(k => `\`${k.code}\` (HWID: \`...${k.hwid.slice(-4)}\`)`).join(", ");
-            const rName = link ? link.roblox_username : "Unknown";
-            const rID = link ? link.roblox_id : "Unknown";
-
-            logToWebhook("⚠️ **Multi-Key Activity Detected**", 
-                `**User:** <@${user.id}> (${user.tag})\n` +
-                `**Roblox:** ${rName} (ID: \`${rID}\`)\n\n` +
-                `**Previous Key(s):** ${oldKeyInfo}\n` +
-                `**New Key:** \`${code}\` (HWID: \`...${userData.hwid.slice(-4)}\`)\n` +
-                `**Time:** <t:${Math.floor(Date.now()/1000)}:F>`,
-                SETTINGS.COLOR_WARN
-            );
-        }
-    }
-
-    // 7. Update DB
+    // 5. Update Database
     await supabase.from("verifications")
         .update({ verified: true, expires_at: expiryTime, discord_id: user.id })
         .eq("id", userData.id);
 
-    // 8. Success Message
+    // 6. Success Response
     const { data: conf } = await supabase.from("guild_config").select("verify_success_msg").eq("guild_id", guild.id).maybeSingle();
     const customText = conf?.verify_success_msg ? `\n\n${conf.verify_success_msg}` : "";
 
     const embed = createEmbed(
-        isPollPunished ? "⚠️ Verified (Restricted)" : "✅ Verification Successful", 
+        isPollPunished ? "⚠️ Verification Restricted" : "✅ Verification Successful", 
         isPollPunished 
-            ? `**You missed a Poll!**\n[Vote Here](${pollUrl}) to remove restriction.\n\n*Penalty Applied.*`
+            ? `**Access Granted, but you missed a Poll!**\n[Vote Here](${pollUrl}) to remove this penalty next time.`
             : `**Access Granted!**\n\n**🔑 Key:** \`${code}\`\n**⏳ Duration:** ${formatTime(finalDuration)}\n**📜 Logic:** ${ruleName}\n**📅 Expires:** ${finalDuration==="LIFETIME"?"**Never**":`<t:${Math.floor(new Date(expiryTime).getTime()/1000)}:R>`}` + customText,
         isPollPunished ? SETTINGS.COLOR_WARN : SETTINGS.COLOR_SUCCESS, 
         user
     );
 
-    // If linked, show Roblox ID in footer
-    if (link) embed.setFooter({ text: `Linked as: ${link.roblox_username} (${link.roblox_id})`, iconURL: SETTINGS.FOOTER_ICON });
+    if (link) embed.setFooter({ text: `Authenticated as: ${link.roblox_username}`, iconURL: SETTINGS.FOOTER_ICON });
 
-    return replyCallback({ embeds: [embed] });
+    return replyCallback({ embeds: [embed], components: [] }); // Empty components to remove buttons
 }
 
-// 🔥 NEW: Handle Key Update
-async function handleKeyUpdate(interaction) {
-    if (!await require("./config").isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Admin Only", ephemeral: true });
-
-    await interaction.deferReply();
-    const target = interaction.options.getString("target");
-    const newCode = interaction.options.getString("new_code");
-
-    // Search by all possible fields
-    const { data: record } = await supabase.from("verifications")
-        .select("*")
-        .or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`)
-        .maybeSingle();
-
-    if (!record) return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `Target not found: \`${target}\``, SETTINGS.COLOR_ERROR)] });
-
-    await supabase.from("verifications").update({ code: newCode }).eq("id", record.id);
-
-    return interaction.editReply({ 
-        embeds: [createEmbed("✅ Key Updated", `**User:** <@${record.discord_id}>\n**Old Key:** \`${record.code}\`\n**New Key:** \`${newCode}\``, SETTINGS.COLOR_SUCCESS)] 
-    });
-}
-
-// 🌐 RE-EXPORTED FUNCTIONS FOR INDEX.JS COMPATIBILITY
+// 🌐 EXPORTED UTILS
 async function handleSetCode(interaction) {
     const user = interaction.options.getUser("user");
     const code = interaction.options.getString("code");
     await supabase.from("verifications").upsert({ discord_id: user.id, code: code, verified: false, hwid: "RESET_ADMIN" }, { onConflict: 'discord_id' });
-    return interaction.reply({ embeds: [createEmbed("✅ Code Set", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
+    return interaction.reply({ embeds: [createEmbed("✅ Code Updated", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
+}
+
+async function handleKeyUpdate(interaction) {
+    if (!await require("./config").isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Admin Only", ephemeral: true });
+    
+    await interaction.deferReply();
+    const target = interaction.options.getString("target");
+    const newCode = interaction.options.getString("new_code");
+
+    const { data: record } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`).maybeSingle();
+    
+    if (!record) return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `Target: \`${target}\``, SETTINGS.COLOR_ERROR)] });
+
+    await supabase.from("verifications").update({ code: newCode }).eq("id", record.id);
+    return interaction.editReply({ embeds: [createEmbed("✅ Key Updated", `User: <@${record.discord_id}>\nOld: \`${record.code}\`\nNew: \`${newCode}\``, SETTINGS.COLOR_SUCCESS)] });
 }
 
 async function handleSetExpiry(interaction) {
@@ -568,34 +499,26 @@ async function handleSetExpiry(interaction) {
         .update({ verified: true, expires_at: exp, admin_note: note })
         .or(`code.eq.${target},hwid.eq.${target}`);
         
-    if(error) return interaction.editReply("❌ Error updating.");
-    return interaction.editReply({ embeds: [createEmbed("✅ Expiry Updated", `Target: \`${target}\`\nNew Time: ${durationStr}`, SETTINGS.COLOR_SUCCESS)] });
+    if(error) return interaction.editReply("❌ Database Error.");
+    return interaction.editReply({ embeds: [createEmbed("✅ Expiry Updated", `Target: \`${target}\`\nTime: ${durationStr}`, SETTINGS.COLOR_SUCCESS)] });
 }
 
 async function handleActiveUsers(interaction, page = 1) {
-    const LIMIT = 10;
-    const offset = (page - 1) * LIMIT;
+    const LIMIT = 10, offset = (page - 1) * LIMIT;
     const replyMethod = interaction.message ? interaction.update.bind(interaction) : interaction.reply.bind(interaction);
     
-    const { data: users, count } = await supabase.from("verifications")
-        .select("*", { count: 'exact' })
-        .eq("verified", true)
-        .gt("expires_at", new Date().toISOString())
-        .range(offset, offset + LIMIT - 1);
-
-    if (!users || users.length === 0) return replyMethod({ embeds: [createEmbed("🔴 Active Users", "No active users.", SETTINGS.COLOR_ERROR)] });
+    const { data: users, count } = await supabase.from("verifications").select("*", { count: 'exact' }).eq("verified", true).gt("expires_at", new Date().toISOString()).range(offset, offset + LIMIT - 1);
+    
+    if (!users || users.length === 0) return replyMethod({ embeds: [createEmbed("🔴 Active Users", "None", SETTINGS.COLOR_ERROR)] });
 
     const list = users.map((u, i) => `**${offset + i + 1}.** <@${u.discord_id}>\n   └ 🔑 \`${u.code}\` | ⏳ <t:${Math.floor(new Date(u.expires_at).getTime()/1000)}:R>`).join("\n\n");
     const totalPages = Math.ceil(count / LIMIT);
-    
-    const embed = createEmbed(`🟢 Active Users (${page}/${totalPages})`, list, SETTINGS.COLOR_SUCCESS);
     
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`active_prev_${page-1}`).setLabel("◀").setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
         new ButtonBuilder().setCustomId(`active_next_${page+1}`).setLabel("▶").setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages)
     );
-    
-    await replyMethod({ embeds: [embed], components: [row] });
+    await replyMethod({ embeds: [createEmbed(`Active Users (${count})`, list, SETTINGS.COLOR_SUCCESS)], components: [row] });
 }
 
 // 📤 EXPORTS
@@ -603,7 +526,7 @@ module.exports = {
     handleVerifyCommand, handleLinkButton, handleLinkModal, handleLinkConfirm,
     handleSetNote, handleBanSystem, handleLookup, handleCheckAlts, handleRules,
     processVerification, handleKeyUpdate, handleSetCode, handleSetExpiry, handleActiveUsers,
-    // Wrappers for Public GetID/Link to redirect to verify
-    handleGetRobloxId: async(i) => i.reply({ content: "⚠️ Use `/verify` to link automatically.", ephemeral: true }),
-    handleLinkRoblox: async(i) => i.reply({ content: "⚠️ Use `/verify` to link automatically.", ephemeral: true })
+    // Wrappers to redirect legacy commands to new flow
+    handleGetRobloxId: async(i) => i.reply({ content: "⚠️ Please use `/verify`. The system will automatically detect your user.", ephemeral: true }),
+    handleLinkRoblox: async(i) => i.reply({ content: "⚠️ Please use `/verify` to link your account via the button.", ephemeral: true })
 };
