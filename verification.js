@@ -34,6 +34,9 @@ async function getRobloxAvatar(userId) {
 // 🌐 SECTION 1: INTERACTIVE VERIFICATION FLOW
 // =====================================================================
 
+/**
+ * Handles the main /verify command.
+ */
 async function handleVerifyCommand(interaction) {
     // 1. Defer Reply to prevent timeouts
     await interaction.deferReply();
@@ -334,51 +337,76 @@ async function handleLookup(interaction) {
     return interaction.editReply({ embeds: [embed] });
 }
 
-// ... Rules and CheckAlts (No changes needed, they are fine) ...
-// (Retaining functions to ensure completeness)
+// =====================================================================
+// ⚙️ SECTION 3: RULES & CONFIGURATION
+// =====================================================================
+
 async function handleRules(interaction) {
     const sub = interaction.options.getSubcommand();
+    
     if (sub === "list") {
+        await interaction.deferReply(); // Added Defer
         const { data } = await supabase.from("role_rules").select("*");
-        const list = data && data.length > 0 ? data.map((r, i) => `**${i+1}.** <@&${r.role_id}> ➜ **${r.duration}**`).join("\n") : "No custom rules set.";
-        return interaction.reply({ embeds: [createEmbed("📜 Verification Rules", list, SETTINGS.COLOR_INFO)] });
+        const list = data && data.length > 0 
+            ? data.map((r, i) => `**${i+1}.** <@&${r.role_id}> ➜ **${r.duration}**`).join("\n") 
+            : "No custom rules set.";
+        return interaction.editReply({ embeds: [createEmbed("📜 Verification Rules", list, SETTINGS.COLOR_INFO)] });
     }
-    const role = interaction.options.getRole("role");
+
+    if (sub === "add" || sub === "set") {
+        await interaction.deferReply(); // Added Defer
+        const role = interaction.options.getRole("role");
+        const dur = interaction.options.getString("duration");
+        await supabase.from("role_rules").upsert({ role_id: role.id, role_name: role.name, duration: dur }, { onConflict: 'role_id' });
+        return interaction.editReply({ embeds: [createEmbed("✅ Rule Configured", `**Role:** ${role}\n**Duration:** \`${dur}\``, SETTINGS.COLOR_SUCCESS)] });
+    }
+
     if (sub === "remove") {
+        await interaction.deferReply(); // Added Defer
+        const role = interaction.options.getRole("role");
         await supabase.from("role_rules").delete().eq("role_id", role.id);
-        return interaction.reply({ embeds: [createEmbed("🗑️ Rule Removed", `Configuration deleted for ${role}.`, SETTINGS.COLOR_WARN)] });
+        return interaction.editReply({ embeds: [createEmbed("🗑️ Rule Removed", `Removed configuration for ${role}.`, SETTINGS.COLOR_WARN)] });
     }
-    const dur = interaction.options.getString("duration");
-    await supabase.from("role_rules").upsert({ role_id: role.id, role_name: role.name, duration: dur }, { onConflict: 'role_id' });
-    return interaction.reply({ embeds: [createEmbed("✅ Rule Added", `**Role:** ${role}\n**Duration:** ${dur}`, SETTINGS.COLOR_SUCCESS)] });
 }
 
 async function handleCheckAlts(interaction) {
     await interaction.deferReply();
     const { data: all } = await supabase.from("verifications").select("*").eq("verified", true).gt("expires_at", new Date().toISOString());
+    
     const map = new Map();
-    all.forEach(u => { if(u.discord_id) { if(!map.has(u.discord_id)) map.set(u.discord_id, []); map.get(u.discord_id).push(u); }});
+    all.forEach(u => { 
+        if(u.discord_id) { 
+            if(!map.has(u.discord_id)) map.set(u.discord_id, []); 
+            map.get(u.discord_id).push(u); 
+        }
+    });
+    
     const alts = Array.from(map.entries()).filter(([_, arr]) => arr.length > 1);
-    if(alts.length===0) return interaction.editReply({ embeds: [createEmbed("✅ Clean", "No alts detected.", SETTINGS.COLOR_SUCCESS)] });
-    const desc = alts.map(([id, keys]) => `<@${id}> **(${keys.length} Keys)**\n` + keys.map(k => `> 🔑 \`${k.code}\` | HWID: \`${k.hwid}\``).join("\n")).join("\n\n");
-    return interaction.editReply({ embeds: [createEmbed(`⚠️ Multi-Key Users (${alts.length})`, desc, SETTINGS.COLOR_WARN)] });
+    
+    if (alts.length === 0) return interaction.editReply({ embeds: [createEmbed("✅ Clean", "No users found with multiple active keys.", SETTINGS.COLOR_SUCCESS)] });
+
+    const desc = alts.map(([id, keys]) => {
+        return `<@${id}> **(${keys.length} Keys)**\n` + keys.map(k => `> 🔑 \`${k.code}\` | HWID: \`${k.hwid}\``).join("\n");
+    }).join("\n\n");
+
+    return interaction.editReply({ embeds: [createEmbed(`⚠️ Detected ${alts.length} Multi-Key Users`, desc, SETTINGS.COLOR_WARN)] });
 }
 
 // =====================================================================
-// 🔑 SECTION 4: CORE VERIFICATION (The Brain)
+// 🔑 SECTION 4: CORE VERIFICATION LOGIC (The Brain)
 // =====================================================================
 
-async function processVerification(user, codeInput, guild, replyCallback) {
+async function processVerification(user, codeInput, guild, replyCallback, originalInteraction = null) {
     if (SETTINGS.MAINTENANCE) return replyCallback({ content: "🚧 **System Maintenance Mode**", ephemeral: true });
 
     const code = codeInput.replace(/verify/gi, "").trim();
 
     // 1. Validate Code
     const { data: userData } = await supabase.from("verifications").select("*").eq("code", code).maybeSingle();
-    if (!userData) return replyCallback({ embeds: [createEmbed("❌ Invalid Code", "This key does not exist.", SETTINGS.COLOR_ERROR)] });
-    if (userData.is_banned) return replyCallback({ embeds: [createEmbed("🚫 BANNED", "Your access has been permanently revoked.", SETTINGS.COLOR_ERROR)] });
+    if (!userData) return replyCallback({ embeds: [createEmbed("❌ Invalid Code", "This key does not exist or has been deleted.", SETTINGS.COLOR_ERROR)] });
+    if (userData.is_banned) return replyCallback({ embeds: [createEmbed("🚫 BANNED", "This key is blacklisted. Access Denied.", SETTINGS.COLOR_ERROR)] });
 
-    // 2. Fetch Link
+    // 2. Fetch User Link
     let { data: link } = await supabase.from("roblox_links").select("*").eq("discord_id", user.id).maybeSingle();
 
     // 2.1 Auto-Detect Logic (From Script Execution)
@@ -387,18 +415,18 @@ async function processVerification(user, codeInput, guild, replyCallback) {
         const rName = userData.executed_roblox_username || "Unknown";
         const avatarUrl = await getRobloxAvatar(rID);
 
-        const embed = createEmbed("👋 Welcome!", `Script detected account:\n\n**${rName}**\nID: \`${rID}\`\n\nIs this you?`, SETTINGS.COLOR_INFO);
+        const embed = createEmbed("👋 Welcome!", `The script detected you are playing as:\n\n**${rName}**\nID: \`${rID}\`\n\nIs this your account? Click **Yes** to link and verify instantly.`, SETTINGS.COLOR_INFO);
         if (avatarUrl) embed.setThumbnail(avatarUrl);
 
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`link_confirm_${rID}_${rName}_${code}`).setLabel("✅ Yes").setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId(`link_start_${code}`).setLabel("✏️ No").setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`link_confirm_${rID}_${rName}_${code}`).setLabel("✅ Yes, This is me").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`link_start_${code}`).setLabel("✏️ No, Enter Manually").setStyle(ButtonStyle.Secondary)
         );
         return replyCallback({ embeds: [embed], components: [row] });
     }
 
     if (!link) {
-        const embed = createEmbed("⚠️ Account Not Linked", "Please link your Roblox account to verify.\nClick below.", SETTINGS.COLOR_WARN);
+        const embed = createEmbed("⚠️ Verification Required", "You must link your Roblox account to verify.\nClick below to start.", SETTINGS.COLOR_WARN);
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`link_start_${code}`).setLabel("🔗 Link Roblox Account").setStyle(ButtonStyle.Primary)
         );
@@ -407,16 +435,27 @@ async function processVerification(user, codeInput, guild, replyCallback) {
 
     // 3. Executor Mismatch Log
     if (userData.executed_roblox_id && userData.executed_roblox_id !== link.roblox_id) {
-        logToWebhook("⚠️ **Suspicious Verification**", `**User:** <@${user.id}>\n**Linked:** ${link.roblox_username}\n**Executor:** ${userData.executed_roblox_username}\n**Key:** \`${code}\`\n**Mismatch Detected.**`);
+        logToWebhook("⚠️ **Suspicious Verification**", 
+            `**User:** <@${user.id}>\n` +
+            `**Linked:** ${link.roblox_username} (\`${link.roblox_id}\`)\n` +
+            `**Executor:** ${userData.executed_roblox_username} (\`${userData.executed_roblox_id}\`)\n` +
+            `**Key:** \`${code}\`\n` + 
+            `**Status:** Mismatch detected but allowed.`,
+            SETTINGS.COLOR_WARN
+        );
     }
 
-    // 4. Poll Check
-    let isPollPunished = false, pollUrl = "";
+    // 4. Poll Punishment Check
+    let isPollPunished = false;
+    let pollUrl = "";
     if (SETTINGS.POLL_LOCK) {
         const { data: activePoll } = await supabase.from("polls").select("*").eq("is_active", true).order('created_at', { ascending: false }).limit(1).maybeSingle();
         if (activePoll) {
             const { data: vote } = await supabase.from("poll_votes").select("*").eq("poll_id", activePoll.id).eq("user_id", user.id).maybeSingle();
-            if (!vote) { isPollPunished = true; pollUrl = `https://discord.com/channels/${SETTINGS.GUILD_ID}/${activePoll.channel_id}`; }
+            if (!vote) { 
+                isPollPunished = true; 
+                pollUrl = `https://discord.com/channels/${SETTINGS.GUILD_ID}/${activePoll.channel_id}`; 
+            }
         }
     }
 
@@ -427,89 +466,128 @@ async function processVerification(user, codeInput, guild, replyCallback) {
     try {
         const member = await guild.members.fetch(user.id);
         const { data: rules } = await supabase.from("role_rules").select("*");
+        
         if (rules && rules.length > 0) {
-            let minPunish = null, maxBoost = null;
+            let minPunish = null;
+            let maxBoost = null;
+
             rules.forEach(r => {
                 if (member.roles.cache.has(r.role_id)) {
                     const d = parseDuration(r.duration);
-                    if (r.role_name.toLowerCase().includes("punish")) { if (minPunish === null || d < minPunish) { minPunish = d; ruleName = `⚖️ ${r.role_name} (Penalty)`; } }
-                    else { if (d === "LIFETIME") maxBoost = "LIFETIME"; else if (maxBoost !== "LIFETIME" && d > (maxBoost || 0)) { maxBoost = d; ruleName = `⭐ ${r.role_name}`; } }
+                    // "Punish" keyword = Penalty
+                    if (r.role_name.toLowerCase().includes("punish")) {
+                        if (minPunish === null || d < minPunish) { 
+                            minPunish = d; 
+                            ruleName = `⚖️ ${r.role_name} (Penalty)`; 
+                        }
+                    } else {
+                        // Boost
+                        if (d === "LIFETIME") maxBoost = "LIFETIME";
+                        else if (maxBoost !== "LIFETIME" && d > (maxBoost || 0)) {
+                            maxBoost = d; 
+                            ruleName = `⭐ ${r.role_name}`;
+                        }
+                    }
                 }
             });
-            if (minPunish !== null) finalDuration = minPunish; else if (maxBoost !== null) finalDuration = maxBoost;
+
+            if (minPunish !== null) finalDuration = minPunish;
+            else if (maxBoost !== null) finalDuration = maxBoost;
         }
     } catch(e) {}
 
-    if (isPollPunished) { finalDuration = SETTINGS.DEFAULT_PUNISH_MS; ruleName = "⚠️ POLL PENALTY"; }
-
-    const expiryTime = finalDuration === "LIFETIME" ? new Date(Date.now() + 3153600000000).toISOString() : new Date(Date.now() + finalDuration).toISOString();
-
-    // 6. DB Update
-    await supabase.from("verifications").update({ verified: true, expires_at: expiryTime, discord_id: user.id }).eq("id", userData.id);
-
-    // 7. Alt Log
-    const { data: activeKeys } = await supabase.from("verifications").select("*").eq("discord_id", user.id).eq("verified", true);
-    if (activeKeys && activeKeys.length > 0 && !activeKeys.some(k => k.code === code)) {
-        logToWebhook("⚠️ **Multi-Key Activity**", `**User:** <@${user.id}>\n**Key:** \`${code}\`\n**Other Active Keys:** ${activeKeys.length}`);
+    if (isPollPunished) {
+        finalDuration = SETTINGS.DEFAULT_PUNISH_MS; 
+        ruleName = "⚠️ POLL PENALTY";
     }
 
-    // 8. Success Embed (Premium)
+    const expiryTime = finalDuration === "LIFETIME" 
+        ? new Date(Date.now() + 3153600000000).toISOString() 
+        : new Date(Date.now() + finalDuration).toISOString();
+
+    // 6. Detailed Alt Logging
+    const { data: activeKeys } = await supabase.from("verifications").select("*").eq("discord_id", user.id).eq("verified", true);
+    
+    if (activeKeys && activeKeys.length > 0) {
+        const isNewKey = !activeKeys.some(k => k.code === code);
+        
+        if (isNewKey) {
+            const oldKeyInfo = activeKeys.map(k => `\`${k.code}\` (HWID: \`...${k.hwid.slice(-4)}\`)`).join(", ");
+            const rName = link ? link.roblox_username : "Unknown";
+            const rID = link ? link.roblox_id : "Unknown";
+
+            logToWebhook("⚠️ **Multi-Key Activity Detected**", 
+                `**User:** <@${user.id}> (${user.tag})\n` +
+                `**Roblox:** ${rName} (ID: \`${rID}\`)\n\n` +
+                `**Previous Key(s):** ${oldKeyInfo}\n` +
+                `**New Key:** \`${code}\` (HWID: \`...${userData.hwid.slice(-4)}\`)\n` +
+                `**Time:** <t:${Math.floor(Date.now()/1000)}:F>`,
+                SETTINGS.COLOR_WARN
+            );
+        }
+    }
+
+    // 7. Update DB
+    await supabase.from("verifications")
+        .update({ verified: true, expires_at: expiryTime, discord_id: user.id })
+        .eq("id", userData.id);
+
+    // 8. Success Response
     const { data: conf } = await supabase.from("guild_config").select("verify_success_msg").eq("guild_id", guild.id).maybeSingle();
-    const customMsg = conf?.verify_success_msg ? `\n\n*${conf.verify_success_msg}*` : "";
+    const customText = conf?.verify_success_msg ? `\n\n${conf.verify_success_msg}` : "";
 
     const embed = createEmbed(
         isPollPunished ? "⚠️ Verification Restricted" : "✅ Verification Successful", 
-        isPollPunished ? `**Missed Poll!** [Vote Here](${pollUrl})` : `**Welcome, ${user.username}!**\nYou have been successfully verified.${customMsg}`,
-        isPollPunished ? SETTINGS.COLOR_WARN : SETTINGS.COLOR_SUCCESS
+        isPollPunished 
+            ? `**Access Granted, but you missed a Poll!**\n[Vote Here](${pollUrl}) to remove this penalty next time.`
+            : `**Access Granted!**\n\n**🔑 Key:** \`${code}\`\n**⏳ Duration:** ${formatTime(finalDuration)}\n**📜 Logic:** ${ruleName}\n**📅 Expires:** ${finalDuration==="LIFETIME"?"**Never**":`<t:${Math.floor(new Date(expiryTime).getTime()/1000)}:R>`}` + customText,
+        isPollPunished ? SETTINGS.COLOR_WARN : SETTINGS.COLOR_SUCCESS, 
+        user
     );
 
-    // Fetch Roblox Avatar for THIS specific embed
-    const avatarUrl = await getRobloxAvatar(link.roblox_id);
-    if (avatarUrl) embed.setThumbnail(avatarUrl);
+    if (link) embed.setFooter({ text: `Authenticated as: ${link.roblox_username}`, iconURL: SETTINGS.FOOTER_ICON });
 
-    embed.addFields(
-        { name: "👤 Discord Account", value: `<@${user.id}>`, inline: true },
-        { name: "🎮 Roblox Account", value: `[${link.roblox_username}](https://www.roblox.com/users/${link.roblox_id}/profile)`, inline: true },
-        { name: "\u200b", value: "\u200b", inline: false },
-        { name: "🔑 License Key", value: `\`${code}\``, inline: true },
-        { name: "⏳ Duration", value: `\`${formatTime(finalDuration)}\``, inline: true },
-        { name: "📜 Applied Logic", value: `\`${ruleName}\``, inline: true },
-        { name: "📅 Expires At", value: finalDuration==="LIFETIME"?"**Never**":`<t:${Math.floor(new Date(expiryTime).getTime()/1000)}:F>`, inline: false },
-        { name: "🖥️ HWID", value: `\`${userData.hwid}\``, inline: false }
-    );
-
-    embed.setFooter({ text: `Squid Game X • Authenticated as ${link.roblox_username}`, iconURL: SETTINGS.FOOTER_ICON });
-
-    return replyCallback({ embeds: [embed], components: [] });
+    return replyCallback({ embeds: [embed], components: [] }); // Empty components to remove buttons
 }
 
-// 🌐 RE-EXPORTS
+// 🌐 RE-EXPORTED UTILS
 async function handleSetCode(interaction) {
+    await interaction.deferReply(); // Added Defer
     const user = interaction.options.getUser("user");
     const code = interaction.options.getString("code");
     await supabase.from("verifications").upsert({ discord_id: user.id, code: code, verified: false, hwid: "RESET_ADMIN" }, { onConflict: 'discord_id' });
-    return interaction.reply({ embeds: [createEmbed("✅ Code Updated", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
+    return interaction.editReply({ embeds: [createEmbed("✅ Code Updated", `User: ${user}\nCode: \`${code}\``, SETTINGS.COLOR_SUCCESS)] });
 }
 
 async function handleKeyUpdate(interaction) {
     if (!await require("./config").isAdmin(interaction.user.id)) return interaction.reply({ content: "❌ Admin Only", ephemeral: true });
+    
     await interaction.deferReply();
-    const t = interaction.options.getString("target"), c = interaction.options.getString("new_code");
-    const { data } = await supabase.from("verifications").select("*").or(`code.eq.${t},hwid.eq.${t},discord_id.eq.${t}`).maybeSingle();
-    if(!data) return interaction.editReply("❌ Not Found");
-    await supabase.from("verifications").update({code:c}).eq("id", data.id);
-    return interaction.editReply({embeds:[createEmbed("✅ Key Updated", `User: <@${data.discord_id}>\nOld: \`${data.code}\`\nNew: \`${c}\``, SETTINGS.COLOR_SUCCESS)]});
+    const target = interaction.options.getString("target");
+    const newCode = interaction.options.getString("new_code");
+
+    const { data: record } = await supabase.from("verifications").select("*").or(`code.eq.${target},hwid.eq.${target},discord_id.eq.${target}`).maybeSingle();
+    
+    if (!record) return interaction.editReply({ embeds: [createEmbed("❌ Not Found", `Target: \`${target}\``, SETTINGS.COLOR_ERROR)] });
+
+    await supabase.from("verifications").update({ code: newCode }).eq("id", record.id);
+    return interaction.editReply({ embeds: [createEmbed("✅ Key Updated", `User: <@${record.discord_id}>\nOld: \`${record.code}\`\nNew: \`${newCode}\``, SETTINGS.COLOR_SUCCESS)] });
 }
 
 async function handleActiveUsers(interaction, page = 1) {
     const LIMIT = 10, offset = (page - 1) * LIMIT;
     const replyMethod = interaction.message ? interaction.update.bind(interaction) : interaction.reply.bind(interaction);
+    
     const { data: users, count } = await supabase.from("verifications").select("*", { count: 'exact' }).eq("verified", true).gt("expires_at", new Date().toISOString()).range(offset, offset + LIMIT - 1);
+    
     if (!users || users.length === 0) return replyMethod({ embeds: [createEmbed("🔴 Active Users", "None", SETTINGS.COLOR_ERROR)], components:[] });
+
     const list = users.map((u, i) => `**${offset + i + 1}.** <@${u.discord_id}>\n   └ 🔑 \`${u.code}\` | ⏳ <t:${Math.floor(new Date(u.expires_at).getTime()/1000)}:R>`).join("\n\n");
+    const totalPages = Math.ceil(count / LIMIT);
+    
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`active_prev_${page-1}`).setLabel("◀").setStyle(ButtonStyle.Secondary).setDisabled(page===1),
-        new ButtonBuilder().setCustomId(`active_next_${page+1}`).setLabel("▶").setStyle(ButtonStyle.Secondary).setDisabled(page*LIMIT>=count)
+        new ButtonBuilder().setCustomId(`active_prev_${page-1}`).setLabel("◀").setStyle(ButtonStyle.Secondary).setDisabled(page === 1),
+        new ButtonBuilder().setCustomId(`active_next_${page+1}`).setLabel("▶").setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages)
     );
     await replyMethod({ embeds: [createEmbed(`Active Users (${count})`, list, SETTINGS.COLOR_SUCCESS)], components: [row] });
 }
@@ -518,6 +596,6 @@ module.exports = {
     handleVerifyCommand, handleLinkButton, handleLinkModal, handleLinkConfirm,
     handleSetNote, handleBanSystem, handleLookup, handleCheckAlts, handleRules,
     processVerification, handleKeyUpdate, handleSetCode, handleSetExpiry, handleActiveUsers,
-    handleGetRobloxId: async(i)=>i.reply({content:"⚠️ Use `/verify`", ephemeral:true}),
-    handleLinkRoblox: async(i)=>i.reply({content:"⚠️ Use `/verify`", ephemeral:true})
+    handleGetRobloxId: async(i) => i.reply({ content: "⚠️ Please use `/verify`. The system will automatically detect your user.", ephemeral: true }),
+    handleLinkRoblox: async(i) => i.reply({ content: "⚠️ Please use `/verify` to link your account via the button.", ephemeral: true })
 };
